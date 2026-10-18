@@ -4,6 +4,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { DictationPhase } from "@/hooks/useDictation";
 
 export type PillAction = "cancel" | "complete";
+export type PillState = { phase: DictationPhase; error?: string | null };
 
 export async function syncPillWithPhase(phase: DictationPhase): Promise<void> {
   const visible = phase !== "idle";
@@ -11,10 +12,10 @@ export async function syncPillWithPhase(phase: DictationPhase): Promise<void> {
 }
 
 export function listenPillPhase(
-  handler: (phase: DictationPhase) => void
+  handler: (state: PillState) => void
 ): Promise<() => void> {
-  return listen<{ phase: DictationPhase }>("pill-phase", (e) => {
-    handler(e.payload.phase);
+  return listen<PillState>("pill-phase", (e) => {
+    handler(e.payload);
   });
 }
 

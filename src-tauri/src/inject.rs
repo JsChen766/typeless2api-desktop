@@ -285,12 +285,17 @@ pub fn inject_text(text: String) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn send_cmd_v() {
-    use enigo::{Enigo, Key, KeyboardControllable};
-    let mut enigo = Enigo::new();
-    enigo.key_down(Key::Meta);
-    enigo.key_click(Key::Layout('v'));
-    enigo.key_up(Key::Meta);
+fn send_cmd_v() -> Result<(), String> {
+    use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+    let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+    enigo
+        .key(Key::Meta, Direction::Press)
+        .map_err(|e| e.to_string())?;
+    let paste = enigo.key(Key::Unicode('v'), Direction::Click);
+    let release = enigo.key(Key::Meta, Direction::Release);
+    paste.map_err(|e| e.to_string())?;
+    release.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -299,13 +304,24 @@ fn inject_text_macos(text: &str) -> Result<(), String> {
     clipboard
         .set_text(text.to_string())
         .map_err(|e| e.to_string())?;
-    let pid = MAC_TARGET_PID.lock().ok().and_then(|guard| *guard);
-    if let Some(pid) = pid {
-        let _ = crate::macos_app::activate_pid(pid);
-        std::thread::sleep(Duration::from_millis(90));
+    if !crate::macos_app::accessibility_trusted() {
+        return Err(
+            "辅助功能权限未生效：请在系统设置→隐私与安全→辅助功能中重新开启 typeless-client，然后重启客户端"
+                .into(),
+        );
     }
-    send_cmd_v();
-    Ok(())
+    let pid = MAC_TARGET_PID.lock().ok().and_then(|guard| *guard);
+    let Some(pid) = pid else {
+        return Err("没有记录到听写前的输入窗口".into());
+    };
+    for _ in 0..3 {
+        let _ = crate::macos_app::activate_pid(pid);
+        std::thread::sleep(Duration::from_millis(120));
+        if crate::macos_app::frontmost_app().is_some_and(|app| app.pid == pid) {
+            return send_cmd_v();
+        }
+    }
+    Err("无法切回听写前的输入窗口".into())
 }
 
 #[cfg(target_os = "windows")]
@@ -545,9 +561,33 @@ pub async fn hide_pill_and_inject(app: tauri::AppHandle, text: String) -> Result
     }
 }
 
+static MAIN_THREAD_ID: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+
+pub fn mark_main_thread() {
+    let _ = MAIN_THREAD_ID.set(std::thread::current().id());
+}
+
+fn on_main_thread<T, F>(app: &tauri::AppHandle, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    if MAIN_THREAD_ID.get() == Some(&std::thread::current().id()) {
+        return task();
+    }
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let _ = tx.send(task());
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv_timeout(Duration::from_secs(5))
+        .map_err(|e| format!("等待窗口主线程操作失败：{e}"))?
+}
+
 #[derive(Clone, serde::Serialize)]
 struct PillPhasePayload {
     phase: String,
+    error: Option<String>,
 }
 
 fn place_pill(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -575,6 +615,19 @@ fn place_pill(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(
 
 #[tauri::command]
 pub fn set_pill_visible(app: tauri::AppHandle, visible: bool, phase: String) -> Result<(), String> {
+    set_pill_state(app, visible, phase, None)
+}
+
+pub fn set_pill_error(app: tauri::AppHandle, error: String) -> Result<(), String> {
+    set_pill_state(app, true, "error".into(), Some(error))
+}
+
+fn set_pill_state(app: tauri::AppHandle, visible: bool, phase: String, error: Option<String>) -> Result<(), String> {
+    let app_for_task = app.clone();
+    on_main_thread(&app, move || set_pill_visible_on_main(&app_for_task, visible, phase, error))
+}
+
+fn set_pill_visible_on_main(app: &tauri::AppHandle, visible: bool, phase: String, error: Option<String>) -> Result<(), String> {
     let pill = app
         .get_webview_window("pill")
         .ok_or_else(|| "未找到胶囊窗口".to_string())?;
@@ -595,6 +648,7 @@ pub fn set_pill_visible(app: tauri::AppHandle, visible: bool, phase: String) -> 
             "pill-phase",
             PillPhasePayload {
                 phase: phase.clone(),
+                error,
             },
         );
     } else {
@@ -603,6 +657,7 @@ pub fn set_pill_visible(app: tauri::AppHandle, visible: bool, phase: String) -> 
             "pill-phase",
             PillPhasePayload {
                 phase: "idle".into(),
+                error: None,
             },
         );
         // 显示走的是 SW_SHOWNOACTIVATE，Tauri 仍认为窗口是隐藏的，只调 hide() 不会把它拿掉。
@@ -629,8 +684,11 @@ fn show_pill_without_focus_mac(pill: &tauri::WebviewWindow) -> Result<(), String
 
 #[tauri::command]
 pub fn position_pill_window(app: tauri::AppHandle) -> Result<(), String> {
-    let window = app
-        .get_webview_window("pill")
-        .ok_or_else(|| "未找到胶囊窗口".to_string())?;
-    place_pill(&app, &window)
+    let app_for_task = app.clone();
+    on_main_thread(&app, move || {
+        let window = app_for_task
+            .get_webview_window("pill")
+            .ok_or_else(|| "未找到胶囊窗口".to_string())?;
+        place_pill(&app_for_task, &window)
+    })
 }

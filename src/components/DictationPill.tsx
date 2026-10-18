@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 type Props = {
   visible: boolean;
   processing?: boolean;
+  error?: string | null;
   onCancel: () => void;
   onComplete: () => void;
   className?: string;
@@ -13,6 +14,7 @@ type Props = {
 export function DictationPill({
   visible,
   processing,
+  error,
   onCancel,
   onComplete,
   className,
@@ -25,7 +27,7 @@ export function DictationPill({
         className
       )}
       role="status"
-      aria-label="听写进行中"
+      aria-label={error ? `听写失败：${error}` : "听写进行中"}
     >
       <button
         type="button"
@@ -35,14 +37,16 @@ export function DictationPill({
       >
         <X className="h-4 w-4" strokeWidth={2.25} />
       </button>
-      <div className="flex w-[132px] items-center justify-center px-1">
-        {processing ? (
+      <div className={cn("flex items-center justify-center px-1", error ? "w-[204px]" : "w-[132px]")}>
+        {error ? (
+          <span className="line-clamp-2 text-center text-[11px] leading-4 text-rose-200" title={error}>{error}</span>
+        ) : processing ? (
           <Loader2 className="h-5 w-5 animate-spin text-zinc-400" />
         ) : (
           <VoiceWaveform />
         )}
       </div>
-      <button
+      {!error ? <button
         type="button"
         disabled={processing}
         onClick={onComplete}
@@ -50,7 +54,7 @@ export function DictationPill({
         aria-label="完成"
       >
         <Check className="h-4 w-4" strokeWidth={2.5} />
-      </button>
+      </button> : null}
     </div>
   );
 }

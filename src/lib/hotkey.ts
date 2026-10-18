@@ -47,7 +47,6 @@ export function keyboardEventToShortcut(e: KeyboardEvent): string | null {
   return parts.join("+");
 }
 
-let activeShortcut: string | null = null;
 let hotkeyHeld = false;
 
 export async function bindGlobalHotkey(
@@ -64,7 +63,6 @@ export async function bindGlobalHotkey(
   } catch {
     /* ignore */
   }
-  activeShortcut = null;
   hotkeyHeld = false;
   await register(normalized, (event) => {
     if (event.state === "Released") {
@@ -75,7 +73,6 @@ export async function bindGlobalHotkey(
     hotkeyHeld = true;
     onPressed();
   });
-  activeShortcut = normalized;
 }
 
 export async function unbindGlobalHotkey(): Promise<void> {
@@ -83,7 +80,6 @@ export async function unbindGlobalHotkey(): Promise<void> {
   try {
     await unregisterAll();
   } finally {
-    activeShortcut = null;
     hotkeyHeld = false;
   }
 }

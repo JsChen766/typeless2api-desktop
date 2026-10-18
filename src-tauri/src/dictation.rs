@@ -95,8 +95,10 @@ fn emit_phase(
         STOPPING.store(false, Ordering::SeqCst);
         arm_cooldown();
     }
-    let visible = phase == "recording" || phase == "processing";
-    if visible {
+    if let Some(message) = error {
+        let _ = inject::set_pill_error(app.clone(), message);
+        crate::show_settings_panel(app);
+    } else if phase == "recording" || phase == "processing" {
         let _ = set_pill_visible(app.clone(), true, phase.to_string());
     } else {
         let _ = set_pill_visible(app.clone(), false, "idle".into());
@@ -131,7 +133,9 @@ pub fn toggle_dictation(app: AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.hide();
     }
-    let _ = set_pill_visible(app.clone(), true, "recording".into());
+    if let Err(err) = set_pill_visible(app.clone(), true, "recording".into()) {
+        log::warn!("无法显示听写胶囊：{err}");
+    }
 
     tauri::async_runtime::spawn(async move {
         let settings = load_runtime_settings(&app);
@@ -140,7 +144,7 @@ pub fn toggle_dictation(app: AppHandle) {
                 &app,
                 "idle",
                 None,
-                Some("请先在托盘打开「设置」填写 API Key".into()),
+                Some("请在设置中填写 API Key".into()),
                 None,
             );
             return;
@@ -495,8 +499,10 @@ fn open_microphone(stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
             }
             _ => return Err::<(), String>("不支持的麦克风采样格式".into()),
         }
-        .map_err(|e| e.to_string())?;
-        stream.play().map_err(|e| e.to_string())?;
+        .map_err(|e| format!("无法启动麦克风，请检查麦克风权限和输入设备（{e}）"))?;
+        stream
+            .play()
+            .map_err(|e| format!("无法录音，请检查麦克风权限和输入设备（{e}）"))?;
         while !mic_stop_flag.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -537,9 +543,17 @@ async fn run_stream(
     let mut mic = open_microphone(stop_mic)?;
     let mut pcm_peak: u32 = 0;
     let url = http_to_ws_url(&base_url, &api_key)?;
-    let (ws, _) = connect_async(&url)
+    let (ws, _) = tokio::time::timeout(Duration::from_secs(8), connect_async(&url))
         .await
-        .map_err(|e| format!("WebSocket 连接失败: {e}"))?;
+        .map_err(|_| "连接 Gateway 超时，请检查地址和网络".to_string())?
+        .map_err(|e| match e {
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if response.status().as_u16() == 401 =>
+            {
+                "API Key 无效或已吊销".to_string()
+            }
+            _ => format!("无法连接 Gateway，请检查地址和网络（{e}）"),
+        })?;
     let (mut write, mut read) = ws.split();
 
     let start = StartMessage {
@@ -745,7 +759,7 @@ pub async fn dictation_start(
                             &app2,
                             "idle",
                             Some(text.clone()),
-                            peak_note,
+                            None,
                             Some(peak),
                         ),
                         Err(err) => emit_phase(
@@ -753,7 +767,7 @@ pub async fn dictation_start(
                             "idle",
                             Some(text.clone()),
                             Some(format!(
-                                "已复制到剪贴板，请到输入框 {}（{err}）",
+                                "{err}；文字已复制到剪贴板，可在输入框按 {}",
                                 inject::paste_shortcut()
                             )),
                             Some(peak),
@@ -798,11 +812,15 @@ pub async fn dictation_stop(app: AppHandle) -> Result<String, String> {
         let _ = tx.send(());
     }
     emit_phase(&app, "processing", None, None, None);
-    session
-        .result_rx
-        .await
-        .map_err(|_| "听写任务异常结束".to_string())?
-        .map(|(text, _peak)| text)
+    match session.result_rx.await {
+        Ok(result) => result.map(|(text, _peak)| text),
+        Err(_) => {
+            DICTATION_BUSY.store(false, Ordering::SeqCst);
+            let message = "听写任务异常结束".to_string();
+            emit_phase(&app, "idle", None, Some(message.clone()), None);
+            Err(message)
+        }
+    }
 }
 
 #[tauri::command]

@@ -36,75 +36,45 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("runtime-settings.json"))
 }
 
-fn seed_api_key_from_workspace() -> String {
-    let candidates = [
-        PathBuf::from("gateway/data/client-api-key.txt"),
-        PathBuf::from("../gateway/data/client-api-key.txt"),
-        PathBuf::from("../../gateway/data/client-api-key.txt"),
-        PathBuf::from("E:/vsProjects/reverse-typeless/gateway/data/client-api-key.txt"),
-    ];
-    for path in candidates {
-        if let Ok(raw) = fs::read_to_string(&path) {
-            let key = raw.trim();
-            if key.starts_with("sk_") {
-                return key.to_string();
-            }
-        }
-    }
-    String::new()
-}
-
-fn persist(app: &AppHandle, settings: &RuntimeSettings) {
-    if let Ok(path) = settings_path(app) {
-        if let Ok(raw) = serde_json::to_string_pretty(settings) {
-            let _ = fs::write(path, raw);
-        }
-    }
+fn persist(app: &AppHandle, settings: &RuntimeSettings) -> Result<(), String> {
+    let path = settings_path(app)?;
+    let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(path, raw).map_err(|e| format!("保存设置失败：{e}"))
 }
 
 pub fn load_runtime_settings(app: &AppHandle) -> RuntimeSettings {
-    if let Ok(guard) = CACHE.lock() {
-        if let Some(cached) = guard.as_ref() {
-            if !cached.api_key.trim().is_empty() {
-                return cached.clone();
-            }
-        }
-    }
-
-    let mut settings = RuntimeSettings::default();
-    if let Ok(path) = settings_path(app) {
-        if path.exists() {
-            if let Ok(raw) = fs::read_to_string(&path) {
-                if let Ok(parsed) = serde_json::from_str::<RuntimeSettings>(&raw) {
-                    settings = parsed;
-                }
-            }
-        }
-    }
-    if settings.api_key.trim().is_empty() {
-        settings.api_key = seed_api_key_from_workspace();
-        if !settings.api_key.is_empty() {
-            persist(app, &settings);
-        }
-    }
     if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some(settings.clone());
+        let settings = guard.get_or_insert_with(|| load_settings_from_disk(app));
+        return settings.clone();
     }
-    settings
+    load_settings_from_disk(app)
+}
+
+fn update_settings(app: &AppHandle, change: impl FnOnce(&mut RuntimeSettings)) -> Result<(), String> {
+    let mut guard = CACHE.lock().map_err(|e| e.to_string())?;
+    let mut settings = guard.clone().unwrap_or_else(|| load_settings_from_disk(app));
+    change(&mut settings);
+    persist(app, &settings)?;
+    *guard = Some(settings);
+    Ok(())
+}
+
+fn load_settings_from_disk(app: &AppHandle) -> RuntimeSettings {
+    settings_path(app)
+        .ok()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
 pub fn update_hotkey(app: &AppHandle, hotkey: String) -> Result<(), String> {
-    let mut settings = load_runtime_settings(app);
-    settings.hotkey = hotkey.trim().to_string();
-    if settings.hotkey.is_empty() {
-        settings.hotkey = default_hotkey();
-    }
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some(settings.clone());
-    }
-    persist(app, &settings);
-    Ok(())
+    update_settings(app, |settings| {
+        settings.hotkey = hotkey.trim().to_string();
+        if settings.hotkey.is_empty() {
+            settings.hotkey = default_hotkey();
+        }
+    })
 }
 
 #[tauri::command]
@@ -115,21 +85,14 @@ pub fn save_runtime_settings(
     locale: Option<String>,
     hotkey: Option<String>,
 ) -> Result<(), String> {
-    let prev = load_runtime_settings(&app);
-    let settings = RuntimeSettings {
-        base_url,
-        api_key,
-        locale: locale.unwrap_or_else(|| "zh-CN".into()),
-        hotkey: hotkey
-            .map(|h| h.trim().to_string())
-            .filter(|h| !h.is_empty())
-            .unwrap_or(prev.hotkey),
-    };
-    if let Ok(mut guard) = CACHE.lock() {
-        *guard = Some(settings.clone());
-    }
-    persist(&app, &settings);
-    Ok(())
+    update_settings(&app, |settings| {
+        settings.base_url = base_url;
+        settings.api_key = api_key;
+        settings.locale = locale.unwrap_or_else(|| "zh-CN".into());
+        if let Some(hotkey) = hotkey.filter(|h| !h.trim().is_empty()) {
+            settings.hotkey = hotkey.trim().to_string();
+        }
+    })
 }
 
 #[tauri::command]

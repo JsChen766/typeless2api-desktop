@@ -1,5 +1,4 @@
 import { ConnectionTestButton } from "@/components/ConnectionTestButton";
-import { DictationPill } from "@/components/DictationPill";
 import { HotkeyField } from "@/components/HotkeyField";
 import { Toggle } from "@/components/Toggle";
 import { useDictation } from "@/hooks/useDictation";
@@ -14,7 +13,6 @@ import {
 } from "@/lib/settings";
 import { formatHotkeyLabel } from "@/lib/hotkey";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -24,56 +22,66 @@ export default function MainRoot() {
   const [baseUrl, setBaseUrl] = useState(loadBaseUrl);
   const [apiKey, setApiKey] = useState(loadApiKey);
   const [keyHint, setKeyHint] = useState<string | null>(
-    () => (loadApiKey() ? null : "请粘贴 API Key（开发用见 gateway/data/client-api-key.txt）")
+    () => (loadApiKey() ? null : "请向管理员索取 API Key")
   );
   const [hotkey, setHotkey] = useState(loadHotkey);
+  const [runtimeReady, setRuntimeReady] = useState(() => !isTauri());
   const [capturingHotkey, setCapturingHotkey] = useState(false);
   const lastBoundHotkey = useRef(hotkey);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const saveVersion = useRef(0);
+  const startupPrewarmDone = useRef(false);
+  const connectionAttempt = useRef(0);
   const [connected, setConnected] = useState<Conn>("idle");
   const [connHint, setConnHint] = useState<string | null>(null);
   const [statusHint, setStatusHint] = useState<string | null>(null);
   const [autostart, setAutostart] = useState(false);
 
-  const onDictationError = useCallback((message: string) => {
-    setStatusHint(message);
+  const onDictationEvent = useCallback((event: {
+    phase: string;
+    text?: string | null;
+    error?: string | null;
+    mic_peak?: number | null;
+  }) => {
+    if (event.phase === "recording") setStatusHint(null);
+    if (event.error) setStatusHint(event.error);
+    else if (event.phase === "idle" && event.text) {
+      setStatusHint("识别完成，文字已复制到剪贴板；可用 ⌘V 粘贴");
+    }
+    else if (event.phase === "idle" && typeof event.mic_peak === "number" && event.mic_peak >= 500) {
+      setStatusHint(`本次录音电平 peak=${event.mic_peak}（正常范围约 500–8000）`);
+    }
   }, []);
 
-  const dictation = useDictation({ baseUrl, apiKey, onError: onDictationError });
+  const dictation = useDictation(onDictationEvent);
 
   useEffect(() => {
+    if (!runtimeReady) return;
     saveBaseUrl(baseUrl);
-  }, [baseUrl]);
+  }, [baseUrl, runtimeReady]);
 
   useEffect(() => {
+    if (!runtimeReady) return;
     saveApiKey(apiKey);
-  }, [apiKey]);
+  }, [apiKey, runtimeReady]);
 
   useEffect(() => {
-    if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
-    void listen<{ phase: string; error?: string | null; mic_peak?: number }>(
-      "dictation-event",
-      (e) => {
-        const { error, mic_peak, phase } = e.payload;
-        if (error) setStatusHint(error);
-        else if (phase === "idle" && typeof mic_peak === "number" && mic_peak >= 500) {
-          setStatusHint(`本次录音电平 peak=${mic_peak}（正常范围约 500–8000）`);
-        }
-      }
-    ).then((fn) => {
-      unlisten = fn;
-    });
-    return () => unlisten?.();
-  }, []);
+    if (!isTauri() || !runtimeReady || startupPrewarmDone.current) return;
+    if (!apiKey.trim() || !baseUrl.trim()) {
+      startupPrewarmDone.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      startupPrewarmDone.current = true;
+      void prewarmDictationUpstream(baseUrl, apiKey);
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [apiKey, baseUrl, runtimeReady]);
 
   useEffect(() => {
-    if (!isTauri() || !apiKey.trim() || !baseUrl.trim()) return;
-    void prewarmDictationUpstream(baseUrl, apiKey);
-  }, [apiKey, baseUrl]);
-
-  useEffect(() => {
+    if (!runtimeReady) return;
     saveHotkey(hotkey);
-  }, [hotkey]);
+  }, [hotkey, runtimeReady]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -81,42 +89,47 @@ export default function MainRoot() {
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
-    void invoke("save_runtime_settings", {
-      baseUrl,
-      apiKey,
-      locale: "zh-CN",
-      hotkey,
+    if (!isTauri() || !runtimeReady) return;
+    const version = ++saveVersion.current;
+    saveQueue.current = saveQueue.current.catch(() => {}).then(async () => {
+      if (version !== saveVersion.current) return;
+      await invoke("save_runtime_settings", {
+        baseUrl,
+        apiKey,
+        locale: "zh-CN",
+      });
+    }).catch((err) => {
+      if (version === saveVersion.current) {
+        setStatusHint("保存设置失败，请检查应用数据目录的写入权限");
+      }
+      throw err;
     });
-  }, [apiKey, baseUrl, hotkey]);
+    void saveQueue.current.catch(() => {});
+  }, [apiKey, baseUrl, runtimeReady]);
 
   useEffect(() => {
     if (!isTauri()) return;
-    const base = loadBaseUrl();
-    const key = loadApiKey();
-    if (base.trim() && key.trim()) {
-      void prewarmDictationUpstream(base, key);
-    }
-    void invoke("save_runtime_settings", {
-      baseUrl: base,
-      apiKey: key,
-      locale: "zh-CN",
-      hotkey: loadHotkey(),
-    });
+    let cancelled = false;
     void invoke<{ base_url: string; api_key: string; hotkey?: string }>(
       "get_runtime_settings"
     ).then((s) => {
-      if (s.base_url && !base) setBaseUrl(s.base_url);
-      if (s.api_key && !key) setApiKey(s.api_key);
-      if (s.hotkey && s.hotkey !== loadHotkey()) {
-        setHotkey(s.hotkey);
-        saveHotkey(s.hotkey);
+      if (cancelled) return;
+      setBaseUrl(s.base_url);
+      setApiKey(s.api_key);
+      setKeyHint(s.api_key.trim() ? null : "请向管理员索取 API Key");
+      setHotkey(s.hotkey || loadHotkey());
+      lastBoundHotkey.current = s.hotkey || loadHotkey();
+      setRuntimeReady(true);
+    }).catch(() => {
+      if (!cancelled) {
+        setStatusHint("无法读取本地设置，请检查应用数据目录后重启客户端");
       }
     });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !runtimeReady) return;
     let cancelled = false;
     const binding = hotkey;
     const apply = async () => {
@@ -138,15 +151,24 @@ export default function MainRoot() {
     return () => {
       cancelled = true;
     };
-  }, [hotkey, capturingHotkey]);
+  }, [hotkey, capturingHotkey, runtimeReady]);
 
 
 
   const testConnection = async () => {
     if (connected === "loading") return;
+    const attempt = ++connectionAttempt.current;
     setConnected("loading");
     setConnHint(null);
+    try {
+      await saveQueue.current;
+    } catch {
+      setConnected("fail");
+      setConnHint("保存设置失败，请检查应用数据目录的写入权限");
+      return;
+    }
     const result = await testGatewayConnection(baseUrl, apiKey);
+    if (attempt !== connectionAttempt.current) return;
     setConnected(result.ok ? "ok" : "fail");
     if (!result.ok) {
       setConnHint(result.message);
@@ -156,6 +178,7 @@ export default function MainRoot() {
       const pool =
         typeof n === "number" ? ` · 账号池 ${n} 个` : "";
       setConnHint(`听写模式 ${mode}${pool}`);
+      void prewarmDictationUpstream(baseUrl, apiKey);
     }
   };
 
@@ -179,6 +202,7 @@ export default function MainRoot() {
             value={baseUrl}
             placeholder="http://127.0.0.1:8787"
             onChange={(e) => {
+              connectionAttempt.current++;
               setBaseUrl(e.target.value);
               if (connected !== "idle") setConnected("idle");
               setConnHint(null);
@@ -190,13 +214,14 @@ export default function MainRoot() {
             value={apiKey}
             placeholder="sk_live_…"
             onChange={(e) => {
+              connectionAttempt.current++;
               setApiKey(e.target.value);
               if (connected !== "idle") setConnected("idle");
               setConnHint(null);
               setKeyHint(
                 e.target.value.trim()
                   ? null
-                  : "请粘贴 API Key（开发用见 gateway/data/client-api-key.txt）"
+                  : "请向管理员索取 API Key"
               );
             }}
           />
@@ -220,10 +245,13 @@ export default function MainRoot() {
           {isTauri() ? (
             <button
               type="button"
-              onClick={() => void invoke("dictation_toggle")}
-              className="w-full rounded-lg border border-foreground/12 py-2 text-sm text-foreground transition-colors hover:border-foreground/30"
+              disabled={!runtimeReady || dictation.processing}
+              onClick={() => void saveQueue.current.then(() => invoke("dictation_toggle")).catch((err: unknown) => {
+                setStatusHint(err instanceof Error ? err.message : "无法切换听写状态");
+              })}
+              className="w-full rounded-lg border border-foreground/12 py-2 text-sm text-foreground transition-colors hover:border-foreground/30 disabled:opacity-50"
             >
-              {dictation.recording ? "结束听写" : "开始听写"}
+              {dictation.processing ? "处理中…" : dictation.recording ? "结束听写" : "开始听写"}
             </button>
           ) : null}
         </section>
@@ -256,15 +284,6 @@ export default function MainRoot() {
           </button>
         ) : null}
       </main>
-
-      {!isTauri() ? (
-        <DictationPill
-          visible={dictation.recording || dictation.processing}
-          processing={dictation.processing}
-          onCancel={dictation.cancel}
-          onComplete={() => void dictation.stopAndSubmit()}
-        />
-      ) : null}
     </div>
   );
 }

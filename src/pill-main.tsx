@@ -1,18 +1,17 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { DictationPill } from "@/components/DictationPill";
-import type { DictationPhase } from "@/hooks/useDictation";
-import { emitPillAction, listenPillPhase } from "@/lib/pillWindow";
+import { emitPillAction, listenPillPhase, type PillState } from "@/lib/pillWindow";
 import "./index.css";
 
 function PillApp() {
-  const [phase, setPhase] = useState<DictationPhase>("idle");
+  const [state, setState] = useState<PillState>({ phase: "idle" });
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listenPillPhase((p) => {
-      if (p === "recording" || p === "processing" || p === "idle") {
-        setPhase(p);
+    void listenPillPhase((next) => {
+      if (next.phase === "recording" || next.phase === "processing" || next.phase === "idle" || next.phase === "error") {
+        setState(next);
       }
     }).then((fn) => {
       unlisten = fn;
@@ -22,8 +21,9 @@ function PillApp() {
 
   return (
     <DictationPill
-      visible={phase !== "idle"}
-      processing={phase === "processing"}
+      visible={state.phase !== "idle"}
+      processing={state.phase === "processing"}
+      error={state.phase === "error" ? state.error ?? "听写失败，请重试" : null}
       onCancel={() => void emitPillAction("cancel")}
       onComplete={() => void emitPillAction("complete")}
       className="!bottom-auto !left-auto !translate-x-0 static"

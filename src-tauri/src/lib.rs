@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{
     Listener, Manager, WindowEvent,
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, MenuItemKind},
     tray::{TrayIconBuilder, TrayIconEvent},
 };
 
@@ -49,6 +49,7 @@ pub fn run() {
             clear_dictation_hotkey_cmd
         ])
         .setup(|app| {
+            inject::mark_main_thread();
             let handle = app.handle().clone();
             app.listen("pill-action", move |event| {
                 let payload = event.payload();
@@ -77,8 +78,14 @@ pub fn run() {
                 )?;
             }
 
+            let open_settings = MenuItem::with_id(app, "open-settings", "打开设置…", true, None::<&str>)?;
+            if let Some(app_menu) = app.menu() {
+                if let Some(MenuItemKind::Submenu(submenu)) = app_menu.items()?.into_iter().next() {
+                    submenu.insert(&open_settings, 1)?;
+                }
+            }
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit])?;
+            let menu = Menu::with_items(app, &[&open_settings, &quit])?;
 
             let icon = app.default_window_icon().expect("missing application icon");
 
@@ -87,7 +94,9 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
-                    if event.id.as_ref() == "quit" {
+                    if event.id.as_ref() == "open-settings" {
+                        toggle_panel(app);
+                    } else if event.id.as_ref() == "quit" {
                         app.exit(0);
                     }
                 })
@@ -156,8 +165,16 @@ fn quit_app(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn set_dictation_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), String> {
-    settings::update_hotkey(&app, hotkey.clone())?;
-    hotkey::apply_dictation_hotkey(&app, &hotkey)
+    let previous = settings::load_runtime_settings(&app).hotkey;
+    if let Err(err) = hotkey::apply_dictation_hotkey(&app, &hotkey) {
+        let _ = hotkey::apply_dictation_hotkey(&app, &previous);
+        return Err(err);
+    }
+    if let Err(err) = settings::update_hotkey(&app, hotkey) {
+        let _ = hotkey::apply_dictation_hotkey(&app, &previous);
+        return Err(err);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -173,6 +190,17 @@ fn toggle_panel(app: &tauri::AppHandle) {
         let _ = window.hide();
         return;
     }
+    show_panel(app);
+}
+
+fn show_panel(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        let _ = window.set_focus();
+        return;
+    }
     // 弹窗还没出现时，前台仍是用户正在输入的程序
     inject::capture_foreground_target();
     place_panel(&window);
@@ -181,6 +209,11 @@ fn toggle_panel(app: &tauri::AppHandle) {
     }
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+pub(crate) fn show_settings_panel(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || show_panel(&app));
 }
 
 fn place_panel(window: &tauri::WebviewWindow) {

@@ -9,6 +9,15 @@ use objc2::{class, msg_send};
 
 const ACTIVATE_IGNORING_OTHERS: u64 = 1;
 
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> u8;
+}
+
+pub fn accessibility_trusted() -> bool {
+    unsafe { AXIsProcessTrusted() != 0 }
+}
+
 #[derive(Clone, Debug)]
 pub struct FrontApp {
     pub pid: i32,
