@@ -14,6 +14,7 @@ import {
 import { formatHotkeyLabel } from "@/lib/hotkey";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { disable, enable, isEnabled } from "@tauri-apps/plugin-autostart";
+import { AudioLines, Eye, EyeOff, Mic2, Power } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type Conn = "idle" | "loading" | "ok" | "fail";
@@ -36,6 +37,7 @@ export default function MainRoot() {
   const [connHint, setConnHint] = useState<string | null>(null);
   const [statusHint, setStatusHint] = useState<string | null>(null);
   const [autostart, setAutostart] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const onDictationEvent = useCallback((event: {
     phase: string;
@@ -173,11 +175,7 @@ export default function MainRoot() {
     if (!result.ok) {
       setConnHint(result.message);
     } else {
-      const mode = result.health.dictation_mode ?? "unknown";
-      const n = result.health.account_pool_size;
-      const pool =
-        typeof n === "number" ? ` · 账号池 ${n} 个` : "";
-      setConnHint(`听写模式 ${mode}${pool}`);
+      setConnHint("Gateway 可用，API Key 已验证");
       void prewarmDictationUpstream(baseUrl, apiKey);
     }
   };
@@ -193,46 +191,91 @@ export default function MainRoot() {
     }
   };
 
+  const connectionLabel = {
+    idle: "未测试",
+    loading: "连接中",
+    ok: "已连接",
+    fail: "连接失败",
+  }[connected];
+
   return (
-    <div className="flex h-full flex-col bg-background">
-      <main className="flex flex-1 flex-col gap-2.5 px-3 py-3">
-        <section className="space-y-2 rounded-xl bg-card p-3">
-          <input
-            className="w-full rounded-lg border border-foreground/12 bg-transparent px-3 py-2.5 text-sm text-foreground outline-none focus:border-foreground/35 focus:ring-2 focus:ring-foreground/10"
-            value={baseUrl}
-            placeholder="http://127.0.0.1:8787"
-            onChange={(e) => {
-              connectionAttempt.current++;
-              setBaseUrl(e.target.value);
-              if (connected !== "idle") setConnected("idle");
-              setConnHint(null);
-            }}
-          />
-          <input
-            type="password"
-            className="w-full rounded-lg border border-foreground/12 bg-transparent px-3 py-2.5 text-sm text-foreground outline-none focus:border-foreground/35 focus:ring-2 focus:ring-foreground/10"
-            value={apiKey}
-            placeholder="sk_live_…"
-            onChange={(e) => {
-              connectionAttempt.current++;
-              setApiKey(e.target.value);
-              if (connected !== "idle") setConnected("idle");
-              setConnHint(null);
-              setKeyHint(
-                e.target.value.trim()
-                  ? null
-                  : "请向管理员索取 API Key"
-              );
-            }}
-          />
+    <div className="flex h-full min-h-0 flex-col bg-[#0d1217] text-[#f1f5f4]">
+      <header className="flex shrink-0 items-center gap-2.5 px-4 pb-2 pt-3">
+        <div className="flex size-8 items-center justify-center rounded-[10px] bg-[#203b38] text-[#7bd5be]">
+          <AudioLines size={17} strokeWidth={2.1} aria-hidden="true" />
+        </div>
+        <div className="leading-tight">
+          <h1 className="text-[14px] font-semibold tracking-[-0.01em]">Typeless</h1>
+          <p className="text-[11px] text-[#94a4aa]">语音输入设置</p>
+        </div>
+      </header>
+
+      <main className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-2">
+        <section className="rounded-[12px] border border-[#263038] bg-[#171d23] px-3 py-2.5">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-[12px] font-semibold text-[#dfe9e6]">连接</h2>
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-[#a5b3b6]" role="status">
+              <span className={`size-1.5 rounded-full ${connected === "ok" ? "bg-[#7bd5be]" : connected === "fail" ? "bg-[#e2a190]" : "bg-[#718087]"}`} />
+              {connectionLabel}
+            </span>
+          </div>
+          <label className="block text-[11px] font-medium text-[#aebbc0]">
+            Gateway 地址
+            <input
+              className="mt-1 block h-9 w-full rounded-[8px] border border-[#34414a] bg-[#10161b] px-2.5 text-[13px] font-normal text-[#f1f5f4] outline-none placeholder:text-[#66767d] focus-visible:border-[#7bd5be] focus-visible:ring-2 focus-visible:ring-[#7bd5be]/20"
+              value={baseUrl}
+              placeholder="http://127.0.0.1:8787"
+              spellCheck={false}
+              onChange={(e) => {
+                connectionAttempt.current++;
+                setBaseUrl(e.target.value);
+                if (connected !== "idle") setConnected("idle");
+                setConnHint(null);
+              }}
+            />
+          </label>
+          <div className="mt-2">
+            <label htmlFor="gateway-api-key" className="block text-[11px] font-medium text-[#aebbc0]">API Key</label>
+            <div className="relative mt-1">
+              <input
+                id="gateway-api-key"
+                type={showApiKey ? "text" : "password"}
+                className="block h-9 w-full rounded-[8px] border border-[#34414a] bg-[#10161b] py-1.5 pl-2.5 pr-9 text-[13px] font-normal text-[#f1f5f4] outline-none placeholder:text-[#66767d] focus-visible:border-[#7bd5be] focus-visible:ring-2 focus-visible:ring-[#7bd5be]/20"
+                value={apiKey}
+                placeholder="输入 API Key"
+                spellCheck={false}
+                onChange={(e) => {
+                  connectionAttempt.current++;
+                  setApiKey(e.target.value);
+                  if (connected !== "idle") setConnected("idle");
+                  setConnHint(null);
+                  setKeyHint(e.target.value.trim() ? null : "请向管理员索取 API Key");
+                }}
+              />
+              <button
+                type="button"
+                aria-label={showApiKey ? "隐藏 API Key" : "显示 API Key"}
+                onClick={() => setShowApiKey((shown) => !shown)}
+                className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-[8px] text-[#90a0a6] hover:text-[#e2eeea] focus-visible:outline-2 focus-visible:outline-[#7bd5be]"
+              >
+                {showApiKey ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}
+              </button>
+            </div>
+          </div>
           {keyHint && !apiKey.trim() ? (
-            <p className="text-xs text-muted-foreground">{keyHint}</p>
+            <p className="mt-1.5 text-[11px] text-[#aebbc0]">{keyHint}</p>
           ) : null}
-          <ConnectionTestButton status={connected} onClick={testConnection} />
-          {connHint ? <p className="text-xs text-muted-foreground">{connHint}</p> : null}
+          <div className="mt-2">
+            <ConnectionTestButton status={connected} onClick={testConnection} />
+            {connHint ? <p role="status" className="mt-1.5 break-words text-[11px] leading-[1.35] text-[#aebbc0]">{connHint}</p> : null}
+          </div>
         </section>
 
-        <section className="space-y-2 rounded-xl bg-card p-3">
+        <section className="rounded-[12px] border border-[#263038] bg-[#171d23] px-3 py-2.5">
+          <div className="mb-2 flex items-baseline justify-between gap-2">
+            <h2 className="text-[12px] font-semibold text-[#dfe9e6]">听写快捷键</h2>
+            <span className="text-[10px] text-[#82949a]">在任意应用中使用</span>
+          </div>
           <HotkeyField
             value={hotkey}
             onChange={(next) => {
@@ -249,18 +292,19 @@ export default function MainRoot() {
               onClick={() => void saveQueue.current.then(() => invoke("dictation_toggle")).catch((err: unknown) => {
                 setStatusHint(err instanceof Error ? err.message : "无法切换听写状态");
               })}
-              className="w-full rounded-lg border border-foreground/12 py-2 text-sm text-foreground transition-colors hover:border-foreground/30 disabled:opacity-50"
+              className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-[9px] bg-[#7bd5be] text-[13px] font-semibold text-[#10221e] outline-none transition-colors hover:bg-[#a0e6d1] focus-visible:ring-2 focus-visible:ring-[#baf2df] focus-visible:ring-offset-2 focus-visible:ring-offset-[#171d23] disabled:cursor-not-allowed disabled:opacity-50"
             >
+              <Mic2 size={15} strokeWidth={2.2} aria-hidden="true" />
               {dictation.processing ? "处理中…" : dictation.recording ? "结束听写" : "开始听写"}
             </button>
           ) : null}
         </section>
 
         {isTauri() ? (
-          <section className="flex items-center justify-between gap-3 rounded-xl bg-card px-3 py-2.5">
+          <section className="flex items-center justify-between gap-3 rounded-[12px] border border-[#263038] bg-[#171d23] px-3 py-2.5">
             <div>
-              <p className="text-sm text-foreground">开机自启</p>
-              <p className="text-[11px] text-muted-foreground">登录后停在任务栏，不打开窗口</p>
+              <p className="text-[12px] font-medium text-[#e5ecea]">开机自启</p>
+              <p className="mt-0.5 text-[10px] text-[#94a4aa]">登录后在后台运行</p>
             </div>
             <Toggle
               checked={autostart}
@@ -271,16 +315,17 @@ export default function MainRoot() {
         ) : null}
 
         {statusHint ? (
-          <p className="px-1 text-xs text-muted-foreground">{statusHint}</p>
+          <p role="status" className="rounded-[8px] bg-[#25332f] px-2.5 py-1.5 text-[11px] leading-relaxed text-[#d1ebe2] break-words">{statusHint}</p>
         ) : null}
 
         {isTauri() ? (
           <button
             type="button"
             onClick={() => void invoke("quit_app")}
-            className="mt-auto rounded-lg px-2 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
+            className="inline-flex h-8 items-center gap-1.5 self-start rounded-[8px] px-2 text-[11px] text-[#8e9da3] outline-none hover:bg-[#20282f] hover:text-[#e5ecea] focus-visible:ring-2 focus-visible:ring-[#7bd5be]"
           >
-            退出
+            <Power size={12} aria-hidden="true" />
+            退出客户端
           </button>
         ) : null}
       </main>

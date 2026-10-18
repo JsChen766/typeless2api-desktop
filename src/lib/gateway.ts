@@ -35,15 +35,10 @@ export async function prewarmDictationUpstream(
   return request;
 }
 
-export type GatewayHealth = {
-  dictation_mode?: string;
-  account_pool_size?: number;
-};
-
 export async function testGatewayConnection(
   baseUrl: string,
   apiKey: string
-): Promise<{ ok: true; health: GatewayHealth } | { ok: false; message: string }> {
+): Promise<{ ok: true } | { ok: false; message: string }> {
   const root = trimSlash(baseUrl.trim());
   if (!root) {
     return { ok: false, message: "请填写 Gateway 地址" };
@@ -63,16 +58,10 @@ export async function testGatewayConnection(
     }
     const body = (await health.json()) as {
       status?: string;
-      dictation_mode?: string;
-      account_pool_size?: number;
     };
     if (body.status !== "ok") {
       return { ok: false, message: "健康检查响应异常" };
     }
-    const healthInfo: GatewayHealth = {
-      dictation_mode: body.dictation_mode,
-      account_pool_size: body.account_pool_size,
-    };
 
     const probe = await gatewayFetch(`${root}/v1/transcribe`, {
       method: "POST",
@@ -83,10 +72,10 @@ export async function testGatewayConnection(
       return { ok: false, message: "API Key 无效或已吊销" };
     }
     if (probe.status === 422 || probe.status === 400) {
-      return { ok: true, health: healthInfo };
+      return { ok: true };
     }
     if (probe.ok) {
-      return { ok: true, health: healthInfo };
+      return { ok: true };
     }
     return { ok: false, message: `验证失败（${probe.status}）` };
   } catch (err) {

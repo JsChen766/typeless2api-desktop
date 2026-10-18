@@ -7,6 +7,7 @@ mod macos_app;
 mod opus;
 mod settings;
 mod text_context;
+mod window_position;
 
 use dictation::{
     dictation_cancel, dictation_start, dictation_stop, dictation_toggle,
@@ -118,6 +119,10 @@ pub fn run() {
                         api.prevent_close();
                     }
                     WindowEvent::Focused(false) => {
+                        #[cfg(target_os = "macos")]
+                        if cursor_over_dock(&w) {
+                            return;
+                        }
                         let just_opened = PANEL_SHOWN_AT
                             .lock()
                             .ok()
@@ -159,7 +164,8 @@ pub fn run() {
         .run(|app, event| {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
-                show_panel(app);
+                remember_dock_anchor(app);
+                toggle_panel(app);
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
@@ -206,12 +212,13 @@ fn show_panel(app: &tauri::AppHandle) {
         return;
     };
     if window.is_visible().unwrap_or(false) {
+        place_panel(app, &window);
         let _ = window.set_focus();
         return;
     }
     // 弹窗还没出现时，前台仍是用户正在输入的程序
     inject::capture_foreground_target();
-    place_panel(&window);
+    place_panel(app, &window);
     if let Ok(mut shown) = PANEL_SHOWN_AT.lock() {
         *shown = Some(Instant::now());
     }
@@ -224,9 +231,10 @@ pub(crate) fn show_settings_panel(app: &tauri::AppHandle) {
     let _ = app.clone().run_on_main_thread(move || show_panel(&app));
 }
 
-fn place_panel(window: &tauri::WebviewWindow) {
-    let width = 320.0;
-    let height = 468.0;
+fn place_panel(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+    let (width, height) = (340.0, 580.0);
     #[cfg(target_os = "windows")]
     {
         use windows::Win32::Foundation::POINT;
@@ -279,44 +287,69 @@ fn place_panel(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "macos")]
     {
         let _ = window.set_focusable(true);
-        let scale = window.scale_factor().unwrap_or(1.0);
-        let (work_left, work_top, work_right, work_bottom) = window
+        let area = window
             .primary_monitor()
             .ok()
             .flatten()
             .map(|monitor| {
-                let origin = monitor.position();
-                let size = monitor.size();
+                let visible = monitor.work_area();
                 let factor = monitor.scale_factor();
-                (
-                    origin.x as f64 / factor,
-                    origin.y as f64 / factor,
-                    (origin.x as f64 + size.width as f64) / factor,
-                    (origin.y as f64 + size.height as f64) / factor,
-                )
+                window_position::Area {
+                    left: visible.position.x as f64 / factor,
+                    top: visible.position.y as f64 / factor,
+                    width: visible.size.width as f64 / factor,
+                    height: visible.size.height as f64 / factor,
+                }
             })
-            .unwrap_or((0.0, 0.0, 1512.0, 982.0));
-        let (cursor_x, cursor_y) = window
-            .cursor_position()
-            .ok()
-            .map(|p| (p.x / scale, p.y / scale))
-            .unwrap_or((work_left + 80.0, work_top + 80.0));
-        let mut x = cursor_x - width + 28.0;
-        let mut y = cursor_y - height - 8.0;
-        if y < work_top {
-            y = cursor_y + 12.0;
-        }
-        if y + height > work_bottom {
-            y = (work_bottom - height - 8.0).max(work_top);
-        }
-        if x < work_left {
-            x = work_left + 8.0;
-        }
-        if x + width > work_right {
-            x = (work_right - width - 8.0).max(work_left);
-        }
-        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+            .unwrap_or(window_position::Area {
+                left: 0.0,
+                top: 24.0,
+                width: 1512.0,
+                height: 890.0,
+            });
+        let anchor_x = settings::load_runtime_settings(app).dock_anchor_x;
+        let position = window_position::settings_position(area, anchor_x, width, height);
+        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+            x: position.x,
+            y: position.y,
+        }));
     }
+}
+
+#[cfg(target_os = "macos")]
+fn remember_dock_anchor(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Some(monitor) = window.primary_monitor().ok().flatten() else {
+        return;
+    };
+    let Ok(cursor) = window.cursor_position() else {
+        return;
+    };
+    let x = cursor.x / monitor.scale_factor();
+    if let Err(err) = settings::update_dock_anchor(app, x) {
+        log::warn!("保存程序坞位置失败: {err}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_over_dock(window: &tauri::WebviewWindow) -> bool {
+    let Some(monitor) = window.primary_monitor().ok().flatten() else {
+        return false;
+    };
+    let Ok(cursor) = window.cursor_position() else {
+        return false;
+    };
+    let screen_bottom = monitor.position().y as f64 + monitor.size().height as f64;
+    let visible = monitor.work_area();
+    let visible_bottom = visible.position.y as f64 + visible.size.height as f64;
+    let dock_top = if screen_bottom - visible_bottom > 24.0 {
+        visible_bottom
+    } else {
+        screen_bottom - 96.0
+    };
+    cursor.y >= dock_top - 8.0 && cursor.y <= screen_bottom + 8.0
 }
 
 #[cfg(target_os = "windows")]

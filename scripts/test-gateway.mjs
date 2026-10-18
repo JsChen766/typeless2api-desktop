@@ -32,6 +32,13 @@ test("invalid API Key is rejected after a healthy Gateway response", async () =>
   });
 });
 
+test("valid API Key succeeds when public health only returns status", async () => {
+  globalThis.mockGatewayFetch = async (url) => url.endsWith("/health")
+    ? new Response(JSON.stringify({ status: "ok" }), { status: 200 })
+    : new Response(JSON.stringify({ detail: "use WebSocket" }), { status: 400 });
+  assert.deepEqual(await testGatewayConnection("http://gateway", "valid"), { ok: true });
+});
+
 test("offline and timeout errors tell the user what to check", async () => {
   globalThis.mockGatewayFetch = async () => { throw new TypeError("fetch failed"); };
   const offline = await testGatewayConnection("http://offline", "key");

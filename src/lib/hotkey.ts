@@ -2,7 +2,17 @@ import { isTauri } from "@tauri-apps/api/core";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 
 export function formatHotkeyLabel(shortcut: string): string {
-  return shortcut.replace(/CommandOrControl/g, "Ctrl").replace(/\+/g, " + ");
+  const normalized = shortcut.replace(/CommandOrControl/g, "Ctrl");
+  if (typeof navigator === "undefined" || !/Mac/i.test(navigator.platform)) {
+    return normalized.replace(/\+/g, " + ");
+  }
+  const symbols: Record<string, string> = {
+    Ctrl: "⌘",
+    Meta: "⌘",
+    Alt: "⌥",
+    Shift: "⇧",
+  };
+  return normalized.split("+").map((part) => symbols[part] ?? part).join("");
 }
 
 /** Tauri global-shortcut 需要 CommandOrControl，而不是 Ctrl */

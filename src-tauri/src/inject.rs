@@ -601,15 +601,41 @@ fn place_pill(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(
     let scale = monitor.scale_factor();
     let pill_w = 280.0;
     let pill_h = 72.0;
+    #[cfg(target_os = "macos")]
+    let (x, y) = {
+        let origin = monitor.position();
+        let visible = monitor.work_area();
+        let position = crate::window_position::pill_position(
+            crate::window_position::Area {
+                left: origin.x as f64 / scale,
+                top: origin.y as f64 / scale,
+                width: size.width as f64 / scale,
+                height: size.height as f64 / scale,
+            },
+            crate::window_position::Area {
+                left: visible.position.x as f64 / scale,
+                top: visible.position.y as f64 / scale,
+                width: visible.size.width as f64 / scale,
+                height: visible.size.height as f64 / scale,
+            },
+            pill_w,
+            pill_h,
+        );
+        (position.x, position.y)
+    };
+    #[cfg(not(target_os = "macos"))]
     let x = (size.width as f64 / scale - pill_w) / 2.0;
+    #[cfg(not(target_os = "macos"))]
     let y = size.height as f64 / scale - pill_h - 48.0;
+    window
+        .set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: pill_w,
+            height: pill_h,
+        }))
+        .map_err(|e| e.to_string())?;
     window
         .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
         .map_err(|e| e.to_string())?;
-    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-        width: pill_w,
-        height: pill_h,
-    }));
     Ok(())
 }
 
@@ -635,6 +661,7 @@ fn set_pill_visible_on_main(app: &tauri::AppHandle, visible: bool, phase: String
         let _ = pill.set_skip_taskbar(true);
         let _ = pill.set_always_on_top(true);
         let _ = pill.set_focusable(false);
+        place_pill(&app, &pill)?;
         // pill.show() 会激活窗口，把正在输入的程序抢到后台。这里只做无焦点显示。
         #[cfg(target_os = "windows")]
         show_pill_without_focus(&pill)?;
@@ -642,7 +669,6 @@ fn set_pill_visible_on_main(app: &tauri::AppHandle, visible: bool, phase: String
         show_pill_without_focus_mac(&pill)?;
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         pill.show().map_err(|e| e.to_string())?;
-        let _ = place_pill(&app, &pill);
         let _ = app.emit_to(
             "pill",
             "pill-phase",

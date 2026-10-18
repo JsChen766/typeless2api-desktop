@@ -11,6 +11,8 @@ pub struct RuntimeSettings {
     pub locale: String,
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
+    #[serde(default)]
+    pub dock_anchor_x: Option<f64>,
 }
 
 fn default_hotkey() -> String {
@@ -24,6 +26,7 @@ impl Default for RuntimeSettings {
             api_key: String::new(),
             locale: "zh-CN".into(),
             hotkey: default_hotkey(),
+            dock_anchor_x: None,
         }
     }
 }
@@ -48,6 +51,14 @@ pub fn load_runtime_settings(app: &AppHandle) -> RuntimeSettings {
         return settings.clone();
     }
     load_settings_from_disk(app)
+}
+
+#[cfg(target_os = "macos")]
+pub fn update_dock_anchor(app: &AppHandle, x: f64) -> Result<(), String> {
+    if !x.is_finite() {
+        return Ok(());
+    }
+    update_settings(app, |settings| settings.dock_anchor_x = Some(x))
 }
 
 fn update_settings(app: &AppHandle, change: impl FnOnce(&mut RuntimeSettings)) -> Result<(), String> {
