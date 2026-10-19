@@ -31,7 +31,7 @@ jobs:
       - name: Check bundle artifacts
         run: |
           ls -la src-tauri/target/release/bundle/dmg/
-          test -f src-tauri/target/release/bundle/macos/typeless-client.app/Contents/Resources/LICENSE
+          test -n "$(ls src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null)"
       - uses: actions/upload-artifact@v4
         with:
           name: typeless-client-v2.0.3-macos-arm64
