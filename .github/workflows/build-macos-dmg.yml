@@ -1,0 +1,41 @@
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install dependencies
+        run: npm ci
+      - name: Test Gateway logic
+        run: npm run test:gateway
+      - name: Test window positioning
+        run: cargo test --manifest-path src-tauri/Cargo.toml window_position::tests --lib
+      - name: Build macOS DMG
+        run: npm run tauri:build -- --bundles dmg
+      - name: Check bundle artifacts
+        run: |
+          ls -la src-tauri/target/release/bundle/dmg/
+          test -f src-tauri/target/release/bundle/macos/typeless-client.app/Contents/Resources/LICENSE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: typeless-client-v2.0.3-macos-arm64
+          path: |
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/typeless-client.app/Contents/Resources/LICENSE
+          if-no-files-found: error
