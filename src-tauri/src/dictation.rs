@@ -287,7 +287,9 @@ impl PcmChunker {
         if self.pending.is_empty() {
             None
         } else {
-            Some(self.pending.drain(..).collect())
+            let mut final_chunk: Vec<u8> = self.pending.drain(..).collect();
+            final_chunk.resize(CHUNK_SAMPLES * 2, 0);
+            Some(final_chunk)
         }
     }
 }
@@ -853,5 +855,24 @@ fn mic_peak_hint(peak: u32) -> Option<String> {
         ))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CHUNK_SAMPLES, PcmChunker};
+
+    #[test]
+    fn final_audio_chunk_is_full_sized_and_silence_padded() {
+        let mut chunker = PcmChunker::new();
+        let full = chunker.push(vec![1; CHUNK_SAMPLES * 2]);
+        assert_eq!(full.len(), 1);
+
+        let remainder = vec![2; 224 * 2];
+        assert!(chunker.push(remainder.clone()).is_empty());
+        let final_chunk = chunker.take_remainder().expect("remainder exists");
+        assert_eq!(final_chunk.len(), CHUNK_SAMPLES * 2);
+        assert_eq!(&final_chunk[..remainder.len()], remainder);
+        assert!(final_chunk[remainder.len()..].iter().all(|byte| *byte == 0));
     }
 }
