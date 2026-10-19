@@ -16,7 +16,18 @@ pub struct RuntimeSettings {
 }
 
 fn default_hotkey() -> String {
-    "F9".into()
+    #[cfg(target_os = "macos")]
+    {
+        return "Fn".into();
+    }
+    #[cfg(windows)]
+    {
+        return "AltRight".into();
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        "F9".into()
+    }
 }
 
 impl Default for RuntimeSettings {

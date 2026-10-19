@@ -6,5 +6,7 @@
 	<string>用于听写录音。</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>用于把识别结果贴回你正在输入的应用。</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>用于将 Fn 键设为听写快捷键（单按切换，组合键不受影响）。</string>
 </dict>
 </plist>

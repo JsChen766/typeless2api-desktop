@@ -18,6 +18,19 @@ pub fn accessibility_trusted() -> bool {
     unsafe { AXIsProcessTrusted() != 0 }
 }
 
+/// 打开系统「辅助功能」设置页，便于用户授权（与 Typeless 相同依赖）。
+pub fn request_accessibility_trust(open_settings: bool) -> bool {
+    if accessibility_trusted() {
+        return true;
+    }
+    if open_settings {
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+    accessibility_trusted()
+}
+
 #[derive(Clone, Debug)]
 pub struct FrontApp {
     pub pid: i32,

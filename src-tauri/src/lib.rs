@@ -1,4 +1,5 @@
 mod dictation;
+mod exclusive_hotkey;
 mod hotkey;
 mod inject;
 #[cfg(target_os = "macos")]
@@ -47,7 +48,9 @@ pub fn run() {
             get_runtime_settings,
             save_runtime_settings,
             set_dictation_hotkey,
-            clear_dictation_hotkey_cmd
+            clear_dictation_hotkey_cmd,
+            macos_accessibility_trusted,
+            macos_open_accessibility_settings
         ])
         .setup(|app| {
             inject::mark_main_thread();
@@ -194,6 +197,30 @@ fn set_dictation_hotkey(app: tauri::AppHandle, hotkey: String) -> Result<(), Str
 #[tauri::command]
 fn clear_dictation_hotkey_cmd(app: tauri::AppHandle) -> Result<(), String> {
     hotkey::clear_dictation_hotkey(&app)
+}
+
+#[tauri::command]
+fn macos_accessibility_trusted() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_app::accessibility_trusted();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+fn macos_open_accessibility_settings() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return macos_app::request_accessibility_trust(true);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 fn toggle_panel(app: &tauri::AppHandle) {

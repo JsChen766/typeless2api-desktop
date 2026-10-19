@@ -1,7 +1,12 @@
 const PREFIX = "rt.";
 
-/** F9 较少与输入法/系统冲突；旧版 Ctrl+Shift+Space 在中文 Windows 上常被占用 */
-export const DEFAULT_HOTKEY = "F9";
+/** macOS 默认 Fn；Windows 默认右 Alt；其它平台 F9 */
+export const DEFAULT_HOTKEY =
+  typeof navigator !== "undefined" && /Mac/i.test(navigator.platform)
+    ? "Fn"
+    : typeof navigator !== "undefined" && /Win/i.test(navigator.platform)
+      ? "AltRight"
+      : "F9";
 export const DEFAULT_BASE_URL = "http://localhost:8787";
 
 function key(name: string) {

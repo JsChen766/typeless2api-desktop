@@ -4,6 +4,7 @@ use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::dictation::toggle_dictation;
+use crate::exclusive_hotkey;
 
 static PRESS_LATCH: AtomicBool = AtomicBool::new(false);
 
@@ -36,6 +37,7 @@ pub fn to_plugin_accel(raw: &str) -> String {
 }
 
 pub fn clear_dictation_hotkey(app: &AppHandle) -> Result<(), String> {
+    exclusive_hotkey::clear_exclusive().map_err(|e| e.to_string())?;
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;
     PRESS_LATCH.store(false, Ordering::SeqCst);
@@ -43,6 +45,15 @@ pub fn clear_dictation_hotkey(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn apply_dictation_hotkey(app: &AppHandle, accel: &str) -> Result<(), String> {
+    let raw = accel.trim();
+    if exclusive_hotkey::is_exclusive_accel(raw) {
+        let gs = app.global_shortcut();
+        gs.unregister_all().map_err(|e| e.to_string())?;
+        PRESS_LATCH.store(false, Ordering::SeqCst);
+        return exclusive_hotkey::apply_exclusive(app, raw);
+    }
+
+    exclusive_hotkey::clear_exclusive().map_err(|e| e.to_string())?;
     let accel = to_plugin_accel(accel);
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;

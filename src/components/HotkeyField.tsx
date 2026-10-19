@@ -1,8 +1,13 @@
-import { formatHotkeyLabel, keyboardEventToShortcut } from "@/lib/hotkey";
+import {
+  formatHotkeyLabel,
+  isExclusiveModifierHotkey,
+  keyboardEventToShortcut,
+} from "@/lib/hotkey";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
-const PRESETS = ["F9", "Ctrl+Alt+Z", "Ctrl+Shift+Space"] as const;
+const PRESETS_MAC = ["Fn", "F9", "AltRight", "Ctrl+Alt+Z"] as const;
+const PRESETS_OTHER = ["F9", "AltRight", "Ctrl+Alt+Z", "Ctrl+Shift+Space"] as const;
 const COMMON_APP_SHORTCUTS = new Set([
   "Ctrl+A", "Ctrl+C", "Ctrl+F", "Ctrl+L", "Ctrl+N", "Ctrl+P",
   "Ctrl+Q", "Ctrl+R", "Ctrl+S", "Ctrl+T", "Ctrl+V", "Ctrl+W", "Ctrl+X", "Ctrl+Z",
@@ -18,6 +23,7 @@ type Props = {
 export function HotkeyField({ value, onChange, onCapturingChange, className }: Props) {
   const [listening, setListening] = useState(false);
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
+  const presets = isMac ? PRESETS_MAC : PRESETS_OTHER;
 
   useEffect(() => {
     onCapturingChange?.(listening);
@@ -64,7 +70,7 @@ export function HotkeyField({ value, onChange, onCapturingChange, className }: P
         )}
       </button>
       <div className="flex flex-wrap gap-1.5" aria-label="快捷键预设">
-        {PRESETS.map((preset) => (
+        {presets.map((preset) => (
           <button
             key={preset}
             type="button"
@@ -84,6 +90,14 @@ export function HotkeyField({ value, onChange, onCapturingChange, className }: P
           </button>
         ))}
       </div>
+      {isExclusiveModifierHotkey(value) ? (
+        <p className="text-[10px] leading-[1.4] text-[#9eb8b2]">
+          只替换「单按」效果（单按开/关听写）；与其它键组合仍按系统原样。
+          {isMac && (value === "Fn" || /^fn$/i.test(value))
+            ? " 需在 系统设置 → 隐私与安全性 → 辅助功能 中授权本应用，并将键盘「按 🌐/Fn 键以」设为「无操作」。"
+            : null}
+        </p>
+      ) : null}
       {isMac && value === "F9" ? (
         <p className="text-[10px] text-[#90a2a7]">部分 Mac 键盘需按 Fn + F9</p>
       ) : null}

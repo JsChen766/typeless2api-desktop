@@ -1,7 +1,41 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 
+const MODIFIER_ONLY_KEYS = new Set([
+  "Fn",
+  "AltRight",
+  "AltLeft",
+  "ControlRight",
+  "ControlLeft",
+  "ShiftRight",
+  "ShiftLeft",
+  "MetaRight",
+  "MetaLeft",
+]);
+
+const MODIFIER_LABELS: Record<string, string> = {
+  Fn: "Fn",
+  AltRight: "右 Alt",
+  AltLeft: "左 Alt",
+  ControlRight: "右 Ctrl",
+  ControlLeft: "左 Ctrl",
+  ShiftRight: "右 Shift",
+  ShiftLeft: "左 Shift",
+  MetaRight: "右 Win",
+  MetaLeft: "左 Win",
+};
+
+export function isExclusiveModifierHotkey(shortcut: string): boolean {
+  const key = shortcut.trim();
+  if (key === "Fn" || /^fn$/i.test(key)) return true;
+  return MODIFIER_ONLY_KEYS.has(key) || /^(Alt|Control|Shift|Meta)(Left|Right)$/i.test(key);
+}
+
 export function formatHotkeyLabel(shortcut: string): string {
+  const trimmed = shortcut.trim();
+  if (MODIFIER_LABELS[trimmed]) {
+    return MODIFIER_LABELS[trimmed];
+  }
   const normalized = shortcut.replace(/CommandOrControl/g, "Ctrl");
   if (typeof navigator === "undefined" || !/Mac/i.test(navigator.platform)) {
     return normalized.replace(/\+/g, " + ");
@@ -37,7 +71,16 @@ function primaryKeyFromEvent(e: KeyboardEvent): string | null {
     ArrowDown: "Down",
     ArrowLeft: "Left",
     ArrowRight: "Right",
+    AltRight: "AltRight",
+    AltLeft: "AltLeft",
+    ControlRight: "ControlRight",
+    ControlLeft: "ControlLeft",
+    ShiftRight: "ShiftRight",
+    ShiftLeft: "ShiftLeft",
+    MetaRight: "MetaRight",
+    MetaLeft: "MetaLeft",
   };
+  if (e.key === "Fn" || e.code === "Fn") return "Fn";
   if (named[code]) return named[code];
   if (e.key === " " || e.key === "Spacebar") return "Space";
   if (e.key.length === 1) return e.key.toUpperCase();
@@ -49,6 +92,9 @@ export function keyboardEventToShortcut(e: KeyboardEvent): string | null {
   if (e.key === "Escape") return null;
   const primary = primaryKeyFromEvent(e);
   if (!primary) return null;
+  if (MODIFIER_ONLY_KEYS.has(primary)) {
+    return primary;
+  }
   const parts: string[] = [];
   if (e.ctrlKey || e.metaKey) parts.push("Ctrl");
   if (e.altKey) parts.push("Alt");
