@@ -6,7 +6,9 @@ macOS（Apple Silicon），应用版本 **2.0.4**。
 
 - **Fn / Globe 单按**切换听写（需辅助功能权限）；**Fn + 其它键**组合行为不变。
 - 建议：系统设置 → 键盘 → 将「按 🌐/Fn 键以」设为 **无操作**。
-- CI 构建含 ad-hoc 签名（`signingIdentity: "-"`）。
+- **本地 Mac 构建**（ad-hoc 签名 `signingIdentity: "-"`），非 GitHub Actions。
+
+同版本 **2.0.4** 安装包可能因修复重新上传；以 Release 页 SHA256 为准。若更新后 Fn 仍异常，请删除辅助功能里旧的 typeless-client 再重新添加。
 
 ## 安装
 
