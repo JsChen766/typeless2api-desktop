@@ -1,16 +1,16 @@
+use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use tauri::AppHandle;
 
+use super::macos_tap::*;
 use super::normalize_exclusive_label;
 use crate::dictation::toggle_dictation;
 use crate::macos_app;
-
-use super::macos_tap::*;
 
 static TARGET_KEY: AtomicU16 = AtomicU16::new(0);
 static MOD_HELD: AtomicBool = AtomicBool::new(false);
@@ -18,14 +18,8 @@ static CHORD_USED: AtomicBool = AtomicBool::new(false);
 static SWALLOWED_DOWN: AtomicBool = AtomicBool::new(false);
 static TOGGLE_LATCH: AtomicBool = AtomicBool::new(false);
 static EXCLUSIVE_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
-
-struct TapThread {
-    run_loop: CFRunLoopRef,
-    tap: CFMachPortRef,
-    source: CFRunLoopSourceRef,
-}
-
-static TAP_THREAD: Mutex<Option<TapThread>> = Mutex::new(None);
+static TAP_PORT: AtomicUsize = AtomicUsize::new(0);
+static TAP_READY: AtomicBool = AtomicBool::new(false);
 
 pub fn is_fn_accel(accel: &str) -> bool {
     matches!(
@@ -81,20 +75,11 @@ pub fn clear_exclusive() -> Result<(), String> {
     CHORD_USED.store(false, Ordering::SeqCst);
     SWALLOWED_DOWN.store(false, Ordering::SeqCst);
     *EXCLUSIVE_APP.lock().map_err(|e| e.to_string())? = None;
-    if let Some(t) = TAP_THREAD.lock().map_err(|e| e.to_string())?.take() {
-        unsafe {
-            CFRunLoopStop(t.run_loop);
-            CFRunLoopRemoveSource(t.run_loop, t.source, kCFRunLoopCommonModes);
-            CFMachPortInvalidate(t.tap);
-            CFRelease(t.source as *const c_void);
-            CFRelease(t.tap as *const c_void);
-        }
-    }
     Ok(())
 }
 
 fn ensure_event_tap() -> Result<(), String> {
-    if TAP_THREAD.lock().map_err(|e| e.to_string())?.is_some() {
+    if TAP_READY.load(Ordering::SeqCst) {
         return Ok(());
     }
 
@@ -128,31 +113,27 @@ fn ensure_event_tap() -> Result<(), String> {
             let run_loop = CFRunLoopGetCurrent();
             CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
             CGEventTapEnable(tap, true);
-
-            *TAP_THREAD.lock().expect("tap thread") = Some(TapThread {
-                run_loop,
-                tap,
-                source,
-            });
+            TAP_PORT.store(tap as usize, Ordering::SeqCst);
+            TAP_READY.store(true, Ordering::SeqCst);
 
             CFRunLoopRun();
 
-            if let Some(t) = TAP_THREAD.lock().expect("tap thread").take() {
-                CFRunLoopRemoveSource(t.run_loop, t.source, kCFRunLoopCommonModes);
-                CFMachPortInvalidate(t.tap);
-                CFRelease(t.source as *const c_void);
-                CFRelease(t.tap as *const c_void);
-            }
+            TAP_READY.store(false, Ordering::SeqCst);
+            TAP_PORT.store(0, Ordering::SeqCst);
+            CFRunLoopRemoveSource(run_loop, source, kCFRunLoopCommonModes);
+            CFMachPortInvalidate(tap);
+            CFRelease(source as *const c_void);
+            CFRelease(tap as *const c_void);
         }
     });
 
     for _ in 0..40 {
-        if TAP_THREAD.lock().map_err(|_| ())?.is_some() {
+        if TAP_READY.load(Ordering::SeqCst) {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(25));
     }
-    Err("macOS 键盘监听线程未就绪".into())
+    Err("macOS 键盘监听线程未就绪（请确认已授予辅助功能权限）".into())
 }
 
 fn post_key(keycode: u16, keydown: bool) {
@@ -175,7 +156,8 @@ fn is_target_event(event: CGEventRef, target: u16) -> bool {
     if event.is_null() {
         return false;
     }
-    let keycode = CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) as u16;
+    let keycode =
+        unsafe { CGEventGetIntegerValueField(event, KEYBOARD_EVENT_KEYCODE) as u16 };
     keycode == target
 }
 
@@ -193,8 +175,9 @@ unsafe extern "C" fn event_callback(
         etype,
         CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
     ) {
-        if let Some(t) = TAP_THREAD.lock().ok().and_then(|g| g.as_ref()) {
-            CGEventTapEnable(t.tap, true);
+        let port = TAP_PORT.load(Ordering::SeqCst) as CFMachPortRef;
+        if !port.is_null() {
+            CGEventTapEnable(port, true);
         }
         return event;
     }
