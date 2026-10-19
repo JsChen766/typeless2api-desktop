@@ -26,6 +26,12 @@ use tauri::{
 };
 
 static PANEL_SHOWN_AT: Mutex<Option<Instant>> = Mutex::new(None);
+#[derive(Clone, Copy)]
+struct PanelAnchor {
+    x: f64,
+    y: f64,
+}
+static LAST_TRAY_ANCHOR: Mutex<Option<PanelAnchor>> = Mutex::new(None);
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -96,17 +102,23 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| {
                     if event.id.as_ref() == "open-settings" {
-                        toggle_panel(app);
+                        toggle_panel(app, None);
                     } else if event.id.as_ref() == "quit" {
                         app.exit(0);
                     }
                 })
                 .on_tray_icon_event(|tray, event| {
-                    if matches!(
-                        event,
-                        TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. }
-                    ) {
-                        toggle_panel(tray.app_handle());
+                    if let TrayIconEvent::Click {
+                        button: tauri::tray::MouseButton::Left,
+                        button_state: tauri::tray::MouseButtonState::Up,
+                        position,
+                        ..
+                    } = event {
+                        let anchor = PanelAnchor { x: position.x, y: position.y };
+                        if let Ok(mut last) = LAST_TRAY_ANCHOR.lock() {
+                            *last = Some(anchor);
+                        }
+                        toggle_panel(tray.app_handle(), Some(anchor));
                     }
                 })
                 .build(app)?;
@@ -121,6 +133,10 @@ pub fn run() {
                     WindowEvent::Focused(false) => {
                         #[cfg(target_os = "macos")]
                         if cursor_over_dock(&w) {
+                            return;
+                        }
+                        #[cfg(target_os = "windows")]
+                        if cursor_over_tray_icon(&w) {
                             return;
                         }
                         let just_opened = PANEL_SHOWN_AT
@@ -165,7 +181,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 remember_dock_anchor(app);
-                toggle_panel(app);
+                toggle_panel(app, None);
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
@@ -196,7 +212,7 @@ fn clear_dictation_hotkey_cmd(app: tauri::AppHandle) -> Result<(), String> {
     hotkey::clear_dictation_hotkey(&app)
 }
 
-fn toggle_panel(app: &tauri::AppHandle) {
+fn toggle_panel(app: &tauri::AppHandle, anchor: Option<PanelAnchor>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -204,21 +220,21 @@ fn toggle_panel(app: &tauri::AppHandle) {
         let _ = window.hide();
         return;
     }
-    show_panel(app);
+    show_panel(app, anchor);
 }
 
-fn show_panel(app: &tauri::AppHandle) {
+fn show_panel(app: &tauri::AppHandle, anchor: Option<PanelAnchor>) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     if window.is_visible().unwrap_or(false) {
-        place_panel(app, &window);
+        place_panel(app, &window, anchor);
         let _ = window.set_focus();
         return;
     }
     // 弹窗还没出现时，前台仍是用户正在输入的程序
     inject::capture_foreground_target();
-    place_panel(app, &window);
+    place_panel(app, &window, anchor);
     if let Ok(mut shown) = PANEL_SHOWN_AT.lock() {
         *shown = Some(Instant::now());
     }
@@ -228,60 +244,73 @@ fn show_panel(app: &tauri::AppHandle) {
 
 pub(crate) fn show_settings_panel(app: &tauri::AppHandle) {
     let app = app.clone();
-    let _ = app.clone().run_on_main_thread(move || show_panel(&app));
+    let _ = app.clone().run_on_main_thread(move || show_panel(&app, None));
 }
 
-fn place_panel(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
+fn place_panel(app: &tauri::AppHandle, window: &tauri::WebviewWindow, anchor: Option<PanelAnchor>) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = anchor;
     let (width, height) = (340.0, 580.0);
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::Foundation::POINT;
-        use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
         let _ = window.set_focusable(true);
         if let Ok(raw) = window.hwnd() {
             let hwnd = windows::Win32::Foundation::HWND(raw.0 as *mut _);
             strip_panel_caption(hwnd);
         }
-        let mut cursor = POINT::default();
-        if unsafe { GetCursorPos(&mut cursor) }.is_err() {
-            return;
-        }
-        let scale = window.scale_factor().unwrap_or(1.0);
-        let (work_left, work_top, work_right, work_bottom) = window
-            .primary_monitor()
-            .ok()
-            .flatten()
+        let tray_anchor = app
+            .tray_by_id("tray")
+            .and_then(|tray| tray.rect().ok().flatten())
+            .and_then(|rect| {
+                let position = rect.position.to_physical::<f64>(1.0);
+                let size = rect.size.to_physical::<f64>(1.0);
+                (size.width > 0.0 && size.height > 0.0).then_some(PanelAnchor {
+                    x: position.x + size.width / 2.0,
+                    y: position.y + size.height / 2.0,
+                })
+            });
+        let last_anchor = LAST_TRAY_ANCHOR.lock().ok().and_then(|last| *last);
+        let anchor = anchor.or(last_anchor).or(tray_anchor);
+        let monitor = anchor
+            .and_then(|point| window.monitor_from_point(point.x, point.y).ok().flatten())
+            .or_else(|| window.primary_monitor().ok().flatten());
+        let (area, scale) = monitor
             .map(|monitor| {
-                let origin = monitor.position();
-                let size = monitor.size();
-                let factor = monitor.scale_factor();
+                let work = monitor.work_area();
                 (
-                    origin.x as f64 / factor,
-                    origin.y as f64 / factor,
-                    (origin.x as f64 + size.width as f64) / factor,
-                    (origin.y as f64 + size.height as f64) / factor,
+                    window_position::Area {
+                        left: work.position.x as f64,
+                        top: work.position.y as f64,
+                        width: work.size.width as f64,
+                        height: work.size.height as f64,
+                    },
+                    monitor.scale_factor(),
                 )
             })
-            .unwrap_or((0.0, 0.0, 1920.0, 1080.0));
-        let cursor_x = cursor.x as f64 / scale;
-        let cursor_y = cursor.y as f64 / scale;
-        let mut x = cursor_x - width + 28.0;
-        let mut y = cursor_y - height - 8.0;
-        if y < work_top {
-            y = cursor_y + 12.0;
-        }
-        if y + height > work_bottom {
-            y = (work_bottom - height - 8.0).max(work_top);
-        }
-        if x < work_left {
-            x = work_left + 8.0;
-        }
-        if x + width > work_right {
-            x = (work_right - width - 8.0).max(work_left);
-        }
-        let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+            .unwrap_or((window_position::Area {
+                left: 0.0,
+                top: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            }, 1.0));
+        let size = window.outer_size().ok();
+        let panel_width = size.map(|size| size.width as f64).unwrap_or(width * scale);
+        let panel_height = size.map(|size| size.height as f64).unwrap_or(height * scale);
+        let anchor = anchor.unwrap_or(PanelAnchor {
+            x: area.left + area.width - panel_width / 2.0,
+            y: area.top + area.height + 28.0 * scale,
+        });
+        let bottom = (anchor.y - 28.0 * scale).min(area.top + area.height);
+        let position = window_position::tray_settings_position(
+            area,
+            window_position::Point { x: anchor.x, y: bottom },
+            panel_width,
+            panel_height,
+        );
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x: position.x.round() as i32,
+            y: position.y.round() as i32,
+        }));
         return;
     }
     #[cfg(target_os = "macos")]
@@ -350,6 +379,37 @@ fn cursor_over_dock(window: &tauri::WebviewWindow) -> bool {
         screen_bottom - 96.0
     };
     cursor.y >= dock_top - 8.0 && cursor.y <= screen_bottom + 8.0
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_over_tray_icon(window: &tauri::WebviewWindow) -> bool {
+    let Ok(cursor) = window.cursor_position() else {
+        return false;
+    };
+    let margin = 8.0 * window.scale_factor().unwrap_or(1.0);
+    if let Some(rect) = window
+        .app_handle()
+        .tray_by_id("tray")
+        .and_then(|tray| tray.rect().ok().flatten())
+    {
+        let position = rect.position.to_physical::<f64>(1.0);
+        let size = rect.size.to_physical::<f64>(1.0);
+        if cursor.x >= position.x - margin
+            && cursor.x <= position.x + size.width + margin
+            && cursor.y >= position.y - margin
+            && cursor.y <= position.y + size.height + margin
+        {
+            return true;
+        }
+    }
+    LAST_TRAY_ANCHOR
+        .lock()
+        .ok()
+        .and_then(|last| *last)
+        .is_some_and(|last| {
+            (cursor.x - last.x).abs() <= 32.0 + margin
+                && (cursor.y - last.y).abs() <= 32.0 + margin
+        })
 }
 
 #[cfg(target_os = "windows")]
