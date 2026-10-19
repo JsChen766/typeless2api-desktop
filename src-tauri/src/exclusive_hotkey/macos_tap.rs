@@ -91,6 +91,8 @@ unsafe extern "C" {
         keydown: bool,
     ) -> CGEventRef;
     pub fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef) -> ();
+    pub fn CGPreflightListenEventAccess() -> bool;
+    pub fn CGRequestListenEventAccess() -> bool;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]

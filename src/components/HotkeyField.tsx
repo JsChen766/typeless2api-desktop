@@ -4,6 +4,7 @@ import {
   keyboardEventToShortcut,
 } from "@/lib/hotkey";
 import { cn } from "@/lib/utils";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 
 const PRESETS_MAC = ["Fn", "F9", "AltRight", "Ctrl+Alt+Z"] as const;
@@ -93,9 +94,21 @@ export function HotkeyField({ value, onChange, onCapturingChange, className }: P
       {isExclusiveModifierHotkey(value) ? (
         <p className="text-[10px] leading-[1.4] text-[#9eb8b2]">
           只替换「单按」效果（单按开/关听写）；与其它键组合仍按系统原样。
-          {isMac && (value === "Fn" || /^fn$/i.test(value))
-            ? " 需在 系统设置 → 隐私与安全性 → 辅助功能 中授权本应用，并将键盘「按 🌐/Fn 键以」设为「无操作」。"
-            : null}
+          {isMac && (value === "Fn" || /^fn$/i.test(value)) ? (
+            <>
+              {" "}
+              需在辅助功能中授权本应用，并将键盘「按 🌐/Fn 键以」设为「无操作」。更新安装包后若仍失败，请删除列表里旧的 typeless-client 再重新添加。
+              {isTauri() ? (
+                <button
+                  type="button"
+                  className="ml-1 underline decoration-[#6a9a8c] underline-offset-2 hover:text-[#c5ebe0]"
+                  onClick={() => void invoke("macos_open_accessibility_settings")}
+                >
+                  打开辅助功能设置
+                </button>
+              ) : null}
+            </>
+          ) : null}
         </p>
       ) : null}
       {isMac && value === "F9" ? (

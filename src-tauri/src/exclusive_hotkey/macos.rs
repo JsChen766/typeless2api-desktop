@@ -20,6 +20,10 @@ static TOGGLE_LATCH: AtomicBool = AtomicBool::new(false);
 static EXCLUSIVE_APP: Mutex<Option<AppHandle>> = Mutex::new(None);
 static TAP_PORT: AtomicUsize = AtomicUsize::new(0);
 static TAP_READY: AtomicBool = AtomicBool::new(false);
+static TAP_STARTING: AtomicBool = AtomicBool::new(false);
+static TAP_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+const TAP_FAIL_HINT: &str = "Fn 快捷键需要系统允许监听键盘：请在 隐私与安全性 中开启「辅助功能」和「输入监控」里的 typeless-client，然后完全退出应用（托盘退出）再重新打开。仅勾选权限而不重启，监听常会注册失败。";
 
 pub fn is_fn_accel(accel: &str) -> bool {
     matches!(
@@ -47,16 +51,61 @@ fn keycode_for_accel(accel: &str) -> Option<u16> {
     }
 }
 
-pub fn apply_exclusive(app: &AppHandle, accel: &str) -> Result<(), String> {
-    if !macos_app::accessibility_trusted() {
-        macos_app::request_accessibility_trust(true);
-        if !macos_app::accessibility_trusted() {
-            return Err(
-                "需要「辅助功能」权限才能使用 Fn/修饰键听写：请在 系统设置 → 隐私与安全性 → 辅助功能 中启用本应用，并将键盘「按 🌐/Fn 键以」设为「无操作」后重试。"
-                    .into(),
-            );
+pub fn macos_hotkey_diagnostics() -> String {
+    let trusted = macos_app::accessibility_trusted();
+    let listen = unsafe { CGPreflightListenEventAccess() };
+    let tap_probe = probe_event_tap();
+    format!(
+        "辅助功能(Accessibility)={}；输入监控(ListenEvent)={}；CGEventTap探测={}；Bundle={}；路径={}",
+        if trusted { "已授权" } else { "未授权" },
+        if listen { "已授权" } else { "未授权" },
+        if tap_probe { "成功" } else { "失败" },
+        macos_app::bundle_identifier(),
+        macos_app::executable_display_path()
+    )
+}
+
+fn probe_event_tap() -> bool {
+    unsafe {
+        let mask = event_mask_for(&[CGEventType::FlagsChanged]);
+        let tap = CGEventTapCreate(
+            CGEventTapLocation::Session,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            mask,
+            stub_callback,
+            ptr::null(),
+        );
+        if tap.is_null() {
+            return false;
+        }
+        CFMachPortInvalidate(tap);
+        CFRelease(tap as *const c_void);
+        true
+    }
+}
+
+unsafe extern "C" fn stub_callback(
+    _proxy: CGEventTapProxy,
+    _etype: CGEventType,
+    event: CGEventRef,
+    _user_info: *const c_void,
+) -> CGEventRef {
+    event
+}
+
+fn request_listen_event_access_if_needed() {
+    unsafe {
+        if !CGPreflightListenEventAccess() {
+            CGRequestListenEventAccess();
         }
     }
+}
+
+pub fn apply_exclusive(app: &AppHandle, accel: &str) -> Result<(), String> {
+    // 勿在此处自动打开「辅助功能」系统设置：AXIsProcessTrusted 在 ad-hoc 重签后常为 false，
+    // 即用户已勾选旧条目也会反复弹窗。以 EventTap 能否创建为准，失败时再给出路径说明。
+    request_listen_event_access_if_needed();
 
     let key = keycode_for_accel(accel).ok_or_else(|| format!("不支持的独占键：{accel}"))?;
     *EXCLUSIVE_APP.lock().map_err(|e| e.to_string())? = Some(app.clone());
@@ -78,28 +127,64 @@ pub fn clear_exclusive() -> Result<(), String> {
     Ok(())
 }
 
+unsafe fn create_event_tap() -> CFMachPortRef {
+    let mask = event_mask_for(&[
+        CGEventType::KeyDown,
+        CGEventType::KeyUp,
+        CGEventType::FlagsChanged,
+    ]);
+    for location in [CGEventTapLocation::Session, CGEventTapLocation::HID] {
+        let tap = CGEventTapCreate(
+            location,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            mask,
+            event_callback,
+            ptr::null(),
+        );
+        if !tap.is_null() {
+            return tap;
+        }
+    }
+    ptr::null_mut()
+}
+
 fn ensure_event_tap() -> Result<(), String> {
     if TAP_READY.load(Ordering::SeqCst) {
         return Ok(());
     }
+    if TAP_STARTING.swap(true, Ordering::SeqCst) {
+        for _ in 0..160 {
+            if TAP_READY.load(Ordering::SeqCst) {
+                return Ok(());
+            }
+            if let Some(msg) = TAP_ERROR.lock().ok().and_then(|g| g.clone()) {
+                TAP_STARTING.store(false, Ordering::SeqCst);
+                return Err(msg);
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        TAP_STARTING.store(false, Ordering::SeqCst);
+        return Err(TAP_FAIL_HINT.into());
+    }
+
+    *TAP_ERROR.lock().map_err(|e| e.to_string())? = None;
 
     thread::spawn(|| {
         unsafe {
-            let mask = event_mask_for(&[
-                CGEventType::KeyDown,
-                CGEventType::KeyUp,
-                CGEventType::FlagsChanged,
-            ]);
-            let tap = CGEventTapCreate(
-                CGEventTapLocation::HID,
-                CGEventTapPlacement::HeadInsertEventTap,
-                CGEventTapOptions::Default,
-                mask,
-                event_callback,
-                ptr::null(),
-            );
+            let tap = create_event_tap();
             if tap.is_null() {
-                log::error!("CGEventTapCreate 返回 null");
+                log::error!("CGEventTapCreate failed (Session+HID)");
+                let diag = macos_hotkey_diagnostics();
+                let mismatch = if !macos_app::accessibility_trusted() {
+                    format!("\n\n{}", macos_app::accessibility_mismatch_hint())
+                } else {
+                    String::new()
+                };
+                *TAP_ERROR.lock().expect("tap error") = Some(format!(
+                    "{TAP_FAIL_HINT}\n（诊断：{diag}）{mismatch}"
+                ));
+                TAP_STARTING.store(false, Ordering::SeqCst);
                 return;
             }
 
@@ -107,6 +192,9 @@ fn ensure_event_tap() -> Result<(), String> {
             if source.is_null() {
                 CFMachPortInvalidate(tap);
                 CFRelease(tap as *const c_void);
+                *TAP_ERROR.lock().expect("tap error") =
+                    Some("键盘监听源创建失败，请重启应用后重试。".into());
+                TAP_STARTING.store(false, Ordering::SeqCst);
                 return;
             }
 
@@ -115,6 +203,7 @@ fn ensure_event_tap() -> Result<(), String> {
             CGEventTapEnable(tap, true);
             TAP_PORT.store(tap as usize, Ordering::SeqCst);
             TAP_READY.store(true, Ordering::SeqCst);
+            TAP_STARTING.store(false, Ordering::SeqCst);
 
             CFRunLoopRun();
 
@@ -127,13 +216,28 @@ fn ensure_event_tap() -> Result<(), String> {
         }
     });
 
-    for _ in 0..40 {
+    for _ in 0..160 {
         if TAP_READY.load(Ordering::SeqCst) {
             return Ok(());
         }
+        if let Some(msg) = TAP_ERROR.lock().ok().and_then(|g| g.clone()) {
+            TAP_STARTING.store(false, Ordering::SeqCst);
+            return Err(msg);
+        }
         thread::sleep(Duration::from_millis(25));
     }
-    Err("macOS 键盘监听线程未就绪（请确认已授予辅助功能权限）".into())
+    TAP_STARTING.store(false, Ordering::SeqCst);
+    let mismatch = if !macos_app::accessibility_trusted() {
+        format!("\n\n{}", macos_app::accessibility_mismatch_hint())
+    } else {
+        String::new()
+    };
+    Err(format!(
+        "{}\n（诊断：{}）{}",
+        TAP_FAIL_HINT,
+        macos_hotkey_diagnostics(),
+        mismatch
+    ))
 }
 
 fn post_key(keycode: u16, keydown: bool) {
@@ -201,9 +305,14 @@ unsafe extern "C" fn event_callback(
             SWALLOWED_DOWN.store(true, Ordering::SeqCst);
             return ptr::null();
         }
+        // Fn/Globe 松开时常会连续收到 FlagsChanged + KeyUp，各触发一次「松开」分支；
+        // 若不去重会 toggle 两次（开始立刻结束），体感像「按住才录」。
+        let had_solo_press = SWALLOWED_DOWN.swap(false, Ordering::SeqCst);
         MOD_HELD.store(false, Ordering::SeqCst);
+        if !had_solo_press {
+            return ptr::null();
+        }
         let chord = CHORD_USED.swap(false, Ordering::SeqCst);
-        SWALLOWED_DOWN.store(false, Ordering::SeqCst);
         if chord {
             return event;
         }

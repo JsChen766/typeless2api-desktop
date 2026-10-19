@@ -50,7 +50,9 @@ pub fn run() {
             set_dictation_hotkey,
             clear_dictation_hotkey_cmd,
             macos_accessibility_trusted,
-            macos_open_accessibility_settings
+            macos_open_accessibility_settings,
+            macos_hotkey_diagnostics,
+            restart_app
         ])
         .setup(|app| {
             inject::mark_main_thread();
@@ -221,6 +223,23 @@ fn macos_open_accessibility_settings() -> bool {
     {
         true
     }
+}
+
+#[tauri::command]
+fn macos_hotkey_diagnostics() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        return exclusive_hotkey::macos_hotkey_diagnostics();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "仅 macOS".into()
+    }
+}
+
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    app.restart();
 }
 
 fn toggle_panel(app: &tauri::AppHandle) {

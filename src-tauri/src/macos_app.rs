@@ -18,15 +18,48 @@ pub fn accessibility_trusted() -> bool {
     unsafe { AXIsProcessTrusted() != 0 }
 }
 
+/// 用户可见的安装/运行路径（用于权限说明；DMG 用户应添加 .app 而非旧副本）。
+pub fn executable_display_path() -> String {
+    std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "（无法读取路径）".into())
+}
+
+pub fn bundle_identifier() -> String {
+    unsafe {
+        let bundle: *mut AnyObject = msg_send![class!(NSBundle), mainBundle];
+        nsstring_to_string(msg_send![bundle, bundleIdentifier])
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "com.reverse-typeless.client".into())
+    }
+}
+
+/// 辅助功能未通过时给用户的说明（含 ad-hoc 签名导致「已开仍失败」的常见原因）。
+pub fn accessibility_mismatch_hint() -> String {
+    let path = executable_display_path();
+    let bid = bundle_identifier();
+    format!(
+        "系统判定当前进程尚未获得辅助功能授权（Bundle ID：{bid}）。\n\
+若列表里已经开过 typeless-client，多半是「授权绑在旧安装上」：本客户端 macOS 包为 ad-hoc 签名，每次新版本签名会变，旧勾选不会自动跟到新程序。\n\
+请打开 隐私与安全性 → 辅助功能：删除列表里所有 typeless-client，点 + 选择你正在用的应用（推荐从「应用程序」选 typeless-client.app），保存后完全退出再打开。\n\
+当前进程路径：{path}"
+    )
+}
+
+/// 打开系统「辅助功能」设置页（仅应在用户主动点击时调用，勿在每次注册快捷键时自动弹出）。
+pub fn open_accessibility_settings() {
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        .spawn();
+}
+
 /// 打开系统「辅助功能」设置页，便于用户授权（与 Typeless 相同依赖）。
 pub fn request_accessibility_trust(open_settings: bool) -> bool {
     if accessibility_trusted() {
         return true;
     }
     if open_settings {
-        let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-            .spawn();
+        open_accessibility_settings();
     }
     accessibility_trusted()
 }

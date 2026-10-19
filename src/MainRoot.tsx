@@ -144,7 +144,13 @@ export default function MainRoot() {
         if (!cancelled) lastBoundHotkey.current = binding;
       } catch (err: unknown) {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : "快捷键注册失败";
+        const raw =
+          typeof err === "string"
+            ? err
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        const message = raw.trim() || "快捷键注册失败";
         setStatusHint(message);
         setHotkey(lastBoundHotkey.current);
       }
@@ -315,7 +321,20 @@ export default function MainRoot() {
         ) : null}
 
         {statusHint ? (
-          <p role="status" className="rounded-[8px] bg-[#25332f] px-2.5 py-1.5 text-[11px] leading-relaxed text-[#d1ebe2] break-words">{statusHint}</p>
+          <div role="status" className="flex flex-col gap-2 rounded-[8px] bg-[#25332f] px-2.5 py-1.5 text-[11px] leading-relaxed text-[#d1ebe2]">
+            <p className="break-words whitespace-pre-wrap">{statusHint}</p>
+            {isTauri() &&
+            /Mac/i.test(navigator.platform) &&
+            (statusHint.includes("完全退出") || statusHint.includes("辅助功能") || statusHint.includes("输入监控")) ? (
+              <button
+                type="button"
+                className="self-start rounded-[6px] bg-[#2d4a42] px-2 py-1 text-[10px] font-medium text-[#b8e8d8] hover:bg-[#35554b]"
+                onClick={() => void invoke("restart_app")}
+              >
+                保存权限后重启应用
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         {isTauri() ? (

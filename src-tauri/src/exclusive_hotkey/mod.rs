@@ -14,7 +14,7 @@ mod unsupported;
 pub use windows::{apply_exclusive, clear_exclusive, is_exclusive_accel};
 
 #[cfg(target_os = "macos")]
-pub use macos::{apply_exclusive, clear_exclusive, is_exclusive_accel};
+pub use macos::{apply_exclusive, clear_exclusive, is_exclusive_accel, macos_hotkey_diagnostics};
 
 #[cfg(not(any(windows, target_os = "macos")))]
 pub use unsupported::{apply_exclusive, clear_exclusive, is_exclusive_accel};
