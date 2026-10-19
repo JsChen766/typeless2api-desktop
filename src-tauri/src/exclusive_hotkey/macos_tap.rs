@@ -72,7 +72,7 @@ pub enum CGEventSource {}
 pub type CGEventSourceRef = *mut CGEventSource;
 
 #[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     pub fn CGEventTapCreate(
         tap: CGEventTapLocation,
         place: CGEventTapPlacement,
@@ -94,7 +94,7 @@ extern "C" {
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     pub static kCFRunLoopCommonModes: CFRunLoopMode;
     pub static kCFAllocatorDefault: CFAllocatorRef;
     pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
