@@ -1,30 +1,20 @@
+pub(crate) const PILL_LOGICAL_WIDTH: f64 = 220.0;
+pub(crate) const PILL_LOGICAL_HEIGHT: f64 = 52.0;
+
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Point {
     pub x: f64,
     pub y: f64,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Area {
     pub left: f64,
     pub top: f64,
     pub width: f64,
     pub height: f64,
-}
-
-#[cfg(any(windows, test))]
-pub(crate) fn tray_settings_position(
-    area: Area,
-    anchor: Point,
-    width: f64,
-    height: f64,
-) -> Point {
-    let max_x = (area.left + area.width - width).max(area.left);
-    let max_y = (area.top + area.height - height).max(area.top);
-    Point {
-        x: (anchor.x - width / 2.0).clamp(area.left, max_x),
-        y: (anchor.y - height).clamp(area.top, max_y),
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -101,27 +91,10 @@ mod tests {
             width: 1512.0,
             height: 890.0,
         };
-        let position = pill_position(display, visible, 280.0, 72.0);
-        assert!(position.y + 72.0 + 16.0 <= visible.top + visible.height);
-        assert!(position.y + 72.0 + 96.0 <= display.top + display.height);
-    }
-}
-
-#[cfg(test)]
-mod tray_tests {
-    use super::*;
-
-    #[test]
-    fn settings_center_over_overflow_tray_icon() {
-        let area = Area { left: 0.0, top: 0.0, width: 910.0, height: 1090.0 };
-        let position = tray_settings_position(area, Point { x: 490.0, y: 956.0 }, 510.0, 870.0);
-        assert_eq!(position, Point { x: 235.0, y: 86.0 });
-    }
-
-    #[test]
-    fn settings_stay_on_screen_at_taskbar_edge() {
-        let area = Area { left: 1920.0, top: 0.0, width: 1280.0, height: 1000.0 };
-        let position = tray_settings_position(area, Point { x: 3160.0, y: 1000.0 }, 510.0, 870.0);
-        assert_eq!(position, Point { x: 2690.0, y: 130.0 });
+        let w = PILL_LOGICAL_WIDTH;
+        let h = PILL_LOGICAL_HEIGHT;
+        let position = pill_position(display, visible, w, h);
+        assert!(position.y + h + 16.0 <= visible.top + visible.height);
+        assert!(position.y + h + 96.0 <= display.top + display.height);
     }
 }

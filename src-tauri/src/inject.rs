@@ -599,8 +599,8 @@ fn place_pill(app: &tauri::AppHandle, window: &tauri::WebviewWindow) -> Result<(
         .ok_or_else(|| "未找到显示器".to_string())?;
     let size = monitor.size();
     let scale = monitor.scale_factor();
-    let pill_w = 280.0;
-    let pill_h = 72.0;
+    let pill_w = crate::window_position::PILL_LOGICAL_WIDTH;
+    let pill_h = crate::window_position::PILL_LOGICAL_HEIGHT;
     #[cfg(target_os = "macos")]
     let (x, y) = {
         let origin = monitor.position();

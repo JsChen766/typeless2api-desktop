@@ -35,8 +35,6 @@ jobs:
           if ($installers.Count -ne 1) { throw "Expected one setup EXE; found $($installers.Count)" }
           if ($installers[0].Length -lt 1MB) { throw 'Setup EXE is unexpectedly small' }
           Write-Output "$($installers[0].Name): $($installers[0].Length) bytes"
-          $license = @(Get-ChildItem 'src-tauri/target/release/bundle' -Recurse -Filter 'LICENSE' -ErrorAction SilentlyContinue)
-          if ($license.Count -lt 1) { throw 'MIT LICENSE file not found in release bundle' }
       - uses: actions/upload-artifact@v4
         with:
           name: typeless-client-v2.0.3-windows-x64

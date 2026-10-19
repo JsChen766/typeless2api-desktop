@@ -19,6 +19,15 @@ export function listenPillPhase(
   });
 }
 
+export function listenDictationLevel(
+  handler: (levels: number[]) => void
+): Promise<() => void> {
+  const win = getCurrentWebviewWindow();
+  return win.listen<{ levels: number[] }>("dictation-level", (e) => {
+    handler(e.payload.levels);
+  });
+}
+
 export async function emitPillAction(action: PillAction): Promise<void> {
   await emit("pill-action", { action });
 }

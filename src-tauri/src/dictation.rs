@@ -35,6 +35,55 @@ const TARGET_RATE: u32 = 16000;
 /// 官方 AudioWorklet：SAMPLES_PER_MESSAGE = 1024
 const CHUNK_SAMPLES: usize = 1024;
 const SINC_HALF_TAPS: i32 = 12;
+const LEVEL_BANDS: usize = 11;
+
+#[derive(Clone, Serialize)]
+struct DictationLevelEvent {
+    levels: Vec<f32>,
+}
+
+struct LevelRing {
+    buf: [f32; LEVEL_BANDS],
+    head: usize,
+}
+
+impl LevelRing {
+    fn new() -> Self {
+        Self {
+            buf: [0.0; LEVEL_BANDS],
+            head: 0,
+        }
+    }
+
+    fn push(&mut self, v: f32) {
+        self.buf[self.head] = v;
+        self.head = (self.head + 1) % LEVEL_BANDS;
+    }
+
+    fn snapshot(&self) -> [f32; LEVEL_BANDS] {
+        let mut out = [0.0; LEVEL_BANDS];
+        for i in 0..LEVEL_BANDS {
+            out[i] = self.buf[(self.head + i) % LEVEL_BANDS];
+        }
+        out
+    }
+}
+
+fn mono_rms_level(mono: &[f32]) -> f32 {
+    if mono.is_empty() {
+        return 0.0;
+    }
+    let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
+    let rms = (mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32).sqrt();
+    let raw = peak.max(rms * 2.0);
+    // 底噪门限：静音时不抬满幅
+    const GATE: f32 = 0.0012;
+    if raw < GATE {
+        return 0.0;
+    }
+    let boosted = ((raw - GATE) * 70.0).min(1.0);
+    boosted.powf(0.82)
+}
 
 #[derive(Clone, Serialize)]
 struct DictationEvent {
@@ -430,9 +479,25 @@ impl Drop for LiveMic {
     }
 }
 
-fn open_microphone(stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
+fn open_microphone(app: AppHandle, stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
     let (pcm_tx, pcm_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
     let mic_stop_flag = stop_mic.clone();
+    let levels = Arc::new(Mutex::new(LevelRing::new()));
+    let levels_cb = levels.clone();
+    let app_emit = app.clone();
+    let emit_stop = stop_mic.clone();
+    std::thread::spawn(move || {
+        while !emit_stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(45));
+            let snapshot = levels
+                .lock()
+                .map(|r| r.snapshot().to_vec())
+                .unwrap_or_else(|_| vec![0.0; LEVEL_BANDS]);
+            let payload = DictationLevelEvent { levels: snapshot };
+            let _ = app_emit.emit("dictation-level", payload.clone());
+            let _ = app_emit.emit_to("pill", "dictation-level", payload);
+        }
+    });
     let mic_thread = std::thread::spawn(move || {
         let host = cpal::default_host();
         let device = host
@@ -447,6 +512,7 @@ fn open_microphone(stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
             cpal::SampleFormat::F32 => {
                 let tx = pcm_tx.clone();
                 let flag = mic_stop_flag.clone();
+                let level_ring = levels_cb.clone();
                 let mut converter = RateConverter::new(sample_rate, TARGET_RATE);
                 device.build_input_stream(
                     &stream_config,
@@ -461,6 +527,9 @@ fn open_microphone(stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
                                 .map(|c| c.iter().sum::<f32>() / channels as f32)
                                 .collect()
                         };
+                        if let Ok(mut ring) = level_ring.lock() {
+                            ring.push(mono_rms_level(&mono));
+                        }
                         let bytes = converter.push(&mono);
                         if !bytes.is_empty() {
                             let _ = tx.send(bytes);
@@ -473,6 +542,7 @@ fn open_microphone(stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
             cpal::SampleFormat::I16 => {
                 let tx = pcm_tx.clone();
                 let flag = mic_stop_flag.clone();
+                let level_ring = levels_cb.clone();
                 let mut converter = RateConverter::new(sample_rate, TARGET_RATE);
                 device.build_input_stream(
                     &stream_config,
@@ -490,6 +560,9 @@ fn open_microphone(stop_mic: Arc<AtomicBool>) -> Result<LiveMic, String> {
                                 })
                                 .collect()
                         };
+                        if let Ok(mut ring) = level_ring.lock() {
+                            ring.push(mono_rms_level(&mono));
+                        }
                         let bytes = converter.push(&mono);
                         if !bytes.is_empty() {
                             let _ = tx.send(bytes);
@@ -542,7 +615,7 @@ async fn run_stream(
         opus_search.push(dir.join("libopuschunk.dylib"));
     }
     let encoder = OpusSession::new(&opus_search)?;
-    let mut mic = open_microphone(stop_mic)?;
+    let mut mic = open_microphone(_app.clone(), stop_mic)?;
     let mut pcm_peak: u32 = 0;
     let url = http_to_ws_url(&base_url, &api_key)?;
     let (ws, _) = tokio::time::timeout(Duration::from_secs(8), connect_async(&url))

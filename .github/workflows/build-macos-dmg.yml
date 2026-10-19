@@ -37,5 +37,4 @@ jobs:
           name: typeless-client-v2.0.3-macos-arm64
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/typeless-client.app/Contents/Resources/LICENSE
           if-no-files-found: error

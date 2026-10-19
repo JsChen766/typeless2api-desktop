@@ -17,6 +17,10 @@
     "autostart:default",
     "clipboard-manager:allow-write-text",
     "core:event:default",
+    {
+      "identifier": "core:event:allow-listen",
+      "allow": [{ "name": "dictation-level" }, { "name": "pill-phase" }]
+    },
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-always-on-top",
