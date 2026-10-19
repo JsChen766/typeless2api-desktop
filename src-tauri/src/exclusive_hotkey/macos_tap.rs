@@ -1,5 +1,4 @@
 //! CGEventTap FFI（可返回 null 吞掉事件），与 core-graphics 高层封装不同。
-#![cfg(target_os = "macos")]
 
 use std::ffi::c_void;
 use std::os::raw::c_long;

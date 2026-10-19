@@ -4,6 +4,8 @@
 mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_tap;
 
 #[cfg(not(any(windows, target_os = "macos")))]
 mod unsupported;

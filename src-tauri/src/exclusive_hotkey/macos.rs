@@ -10,8 +10,7 @@ use super::normalize_exclusive_label;
 use crate::dictation::toggle_dictation;
 use crate::macos_app;
 
-mod macos_tap;
-use macos_tap::*;
+use super::macos_tap::*;
 
 static TARGET_KEY: AtomicU16 = AtomicU16::new(0);
 static MOD_HELD: AtomicBool = AtomicBool::new(false);
