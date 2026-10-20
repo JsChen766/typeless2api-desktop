@@ -37,6 +37,6 @@ jobs:
           Write-Output "$($installers[0].Name): $($installers[0].Length) bytes"
       - uses: actions/upload-artifact@v4
         with:
-          name: typeless-client-v2.0.4-windows-x64
+          name: typeless-client-v2.0.5-windows-x64
           path: src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error

@@ -81,8 +81,13 @@ fn mono_rms_level(mono: &[f32]) -> f32 {
     if raw < GATE {
         return 0.0;
     }
-    let boosted = ((raw - GATE) * 70.0).min(1.0);
-    boosted.powf(0.82)
+    // macOS 内置麦电平偏高，增益略低以免 UI 长期顶满
+    #[cfg(target_os = "macos")]
+    const GAIN: f32 = 36.0;
+    #[cfg(not(target_os = "macos"))]
+    const GAIN: f32 = 70.0;
+    let boosted = ((raw - GATE) * GAIN).min(1.0);
+    boosted.powf(0.88)
 }
 
 #[derive(Clone, Serialize)]
