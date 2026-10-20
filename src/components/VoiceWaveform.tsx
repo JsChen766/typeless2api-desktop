@@ -1,5 +1,9 @@
-import { useMemo, useRef } from "react";
+import { driveFromLevel, macSyntheticHeights, masterFromLevels } from "@/lib/waveformSynth";
 import { cn } from "@/lib/utils";
+import { useMemo, useRef } from "react";
+
+const isMacPlatform =
+  typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
 const BANDS = 11;
 const IDLE_ENVELOPE = [0.12, 0.18, 0.28, 0.36, 0.42, 0.42, 0.36, 0.28, 0.18, 0.12, 0.08];
@@ -60,11 +64,21 @@ export function VoiceWaveform({
   levels,
 }: Props) {
   const smoothRef = useRef<number[] | null>(null);
+  const macPhaseRef = useRef(0);
   const live = levels && levels.length >= BANDS;
 
   const heights = useMemo(() => {
-    if (!live || !levels) return IDLE_ENVELOPE;
-    const target = shapeLiveLevels(levels);
+    if (!live || !levels) {
+      macPhaseRef.current = 0;
+      return IDLE_ENVELOPE;
+    }
+    const target = isMacPlatform
+      ? (() => {
+          macPhaseRef.current += 0.24;
+          const drive = driveFromLevel(masterFromLevels(levels));
+          return macSyntheticHeights(drive, macPhaseRef.current);
+        })()
+      : shapeLiveLevels(levels);
     const prev = smoothRef.current;
     if (!prev || prev.length !== BANDS) {
       smoothRef.current = target;
